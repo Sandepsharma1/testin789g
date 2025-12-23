@@ -1,0 +1,30 @@
+﻿{
+    "Items": [
+        {
+            "media": {
+                "L": [
+                    {
+                        "M": {
+                            "type": {
+                                "S": "image"
+                            },
+                            "url": {
+                                "S": "https://buddylynk-media-bucket-2024.s3.amazonaws.com/1765307599749-806833713.jpg"
+                            }
+                        }
+                    }
+                ]
+            },
+            "postId": {
+                "S": "e1885ead-faaf-438a-8592-970faf530cdd"
+            }
+        }
+    ],
+    "Count": 1,
+    "ScannedCount": 1,
+    "LastEvaluatedKey": {
+        "postId": {
+            "S": "e1885ead-faaf-438a-8592-970faf530cdd"
+        }
+    }
+}

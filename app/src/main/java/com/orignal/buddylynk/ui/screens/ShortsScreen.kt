@@ -46,6 +46,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.orignal.buddylynk.data.model.Post
+import com.orignal.buddylynk.data.cache.VideoPlayerCache
 import com.orignal.buddylynk.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -104,8 +105,12 @@ class ShortsPlayerManager(private val context: android.content.Context) {
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
         
+        // Use cached data source for disk caching (videos won't re-download)
+        val cacheDataSourceFactory = VideoPlayerCache.getCacheDataSourceFactory(context)
+        
         return ExoPlayer.Builder(context)
             .setLoadControl(loadControl)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
             .build()
     }
     
@@ -173,6 +178,15 @@ fun ShortsScreen(
     DisposableEffect(Unit) {
         onDispose {
             playerManager.releaseAll()
+        }
+    }
+    
+    // Keep screen awake while watching shorts (like YouTube/TikTok)
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
     
@@ -398,8 +412,8 @@ private fun HolographicShortCard(
         label = "cardAlpha"
     )
     
-    // Video loading state
-    var isVideoLoading by remember { mutableStateOf(true) }
+    // Video loading state - start with FALSE for instant display
+    var isVideoLoading by remember { mutableStateOf(false) }
     var videoProgress by remember { mutableStateOf(0f) }
     
     // Get player from manager (reuses pre-loaded player if available)
@@ -411,13 +425,17 @@ private fun HolographicShortCard(
         }
     }
     
-    // Listen for player state to track loading
-    LaunchedEffect(exoPlayer) {
-        exoPlayer?.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                isVideoLoading = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
+    // Continuously poll player state to track loading (like Instagram)
+    // This ensures we only show loading when actually buffering
+    LaunchedEffect(exoPlayer, isCurrentPage) {
+        exoPlayer?.let { player ->
+            while (isCurrentPage) {
+                // Only show loading if truly buffering AND not playing
+                val shouldShowLoading = player.playbackState == Player.STATE_BUFFERING && !player.isPlaying
+                isVideoLoading = shouldShowLoading
+                delay(100)
             }
-        })
+        }
     }
     
     // Track video progress for timeline

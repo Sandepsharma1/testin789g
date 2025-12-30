@@ -83,13 +83,27 @@ object BackendRepository {
     
     // ========== POST OPERATIONS ==========
     
-    suspend fun getFeedPosts(): List<Post> {
+    // Data class for feed result with pagination
+    data class FeedResult(
+        val posts: List<Post>,
+        val hasMore: Boolean,
+        val nextPage: Int?,
+        val totalPosts: Int
+    )
+    
+    suspend fun getFeedPosts(page: Int = 0, limit: Int = 30): FeedResult {
         return try {
-            val result = ApiService.getFeed()
-            result.getOrNull()?.mapNotNull { parsePostFromJson(it) } ?: emptyList()
+            val result = ApiService.getFeed(page, limit)
+            val response = result.getOrNull()
+            if (response != null) {
+                val posts = response.posts.mapNotNull { parsePostFromJson(it) }
+                FeedResult(posts, response.hasMore, response.nextPage, response.totalPosts)
+            } else {
+                FeedResult(emptyList(), false, null, 0)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "API getFeed failed", e)
-            emptyList()
+            FeedResult(emptyList(), false, null, 0)
         }
     }
     
@@ -224,6 +238,28 @@ object BackendRepository {
             result.isSuccess
         } catch (e: Exception) {
             Log.e(TAG, "API unblockUser failed", e)
+            false
+        }
+    }
+    
+    // ========== LIKED POSTS OPERATIONS ==========
+    
+    suspend fun getLikedPostIds(): List<String> {
+        return try {
+            val result = ApiService.getLikedPostIds()
+            result.getOrNull() ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "API getLikedPostIds failed", e)
+            emptyList()
+        }
+    }
+    
+    suspend fun toggleLikePost(postId: String): Boolean {
+        return try {
+            val result = ApiService.likePost(postId)
+            result.isSuccess
+        } catch (e: Exception) {
+            Log.e(TAG, "API likePost failed", e)
             false
         }
     }
@@ -454,12 +490,15 @@ object BackendRepository {
                 mediaUrls = mediaUrls,
                 mediaType = mediaType,
                 likesCount = json.optInt("likesCount", json.optInt("likes", json.optInt("likeCount", 0))),
-                commentsCount = json.optInt("commentsCount", json.optInt("commentCount", 0)),
+                commentsCount = json.optInt("commentsCount", json.optInt("commentCount", json.optJSONArray("comments")?.length() ?: 0)),
                 sharesCount = json.optInt("sharesCount", json.optInt("shares", json.optInt("shareCount", 0))),
                 viewsCount = json.optInt("viewsCount", json.optInt("views", json.optInt("viewCount", 0))),
                 createdAt = json.optString("createdAt", ""),
                 isLiked = json.optBoolean("isLiked", json.optBoolean("isLikedByMe", false)),
-                isBookmarked = json.optBoolean("isBookmarked", json.optBoolean("isSaved", false))
+                isBookmarked = json.optBoolean("isBookmarked", json.optBoolean("isSaved", false)),
+                // NSFW flags from backend - persists from DynamoDB
+                isNSFW = json.optBoolean("isNSFW", json.optBoolean("isNsfw", false)),
+                isSensitive = json.optBoolean("isSensitive", json.optBoolean("isNsfw", false))
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing post: ${e.message}")

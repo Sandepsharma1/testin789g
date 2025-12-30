@@ -38,10 +38,45 @@
             android:windowSoftInputMode="adjustResize"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Buddylynk">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            
+            <!-- Android App Links for app.buddylynk.com (autoVerify requires assetlinks.json on server) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="app.buddylynk.com"
+                    android:pathPrefix="/post" />
+                <data
+                    android:scheme="https"
+                    android:host="app.buddylynk.com"
+                    android:pathPrefix="/user" />
+            </intent-filter>
+            
+            <!-- Custom scheme deep links (buddylynk://) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="buddylynk" android:host="post" />
+                <data android:scheme="buddylynk" android:host="user" />
+            </intent-filter>
+            
+            <!-- Firebase Dynamic Links -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="buddylynk.page.link" />
             </intent-filter>
         </activity>
         

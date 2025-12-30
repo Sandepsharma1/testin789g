@@ -545,14 +545,21 @@ fun SavedPostsScreen(
     // Load saved posts
     LaunchedEffect(Unit) {
         isLoading = true
-        // Get saved post IDs from API, then fetch post details
-        val savedIds = BackendRepository.getSavedPostIds()
-        val posts = mutableListOf<com.orignal.buddylynk.data.model.Post>()
-        for (id in savedIds) {
-            // TODO: Add getPosts by IDs endpoint for efficiency
-            // For now, posts are loaded from feed
+        try {
+            // Get saved post IDs from API
+            val savedIds = BackendRepository.getSavedPostIds()
+            
+            if (savedIds.isNotEmpty()) {
+                // Get all feed posts and filter to just the saved ones
+                val allPosts = BackendRepository.getFeedPosts()
+                val savedPostsList = allPosts.filter { post -> 
+                    savedIds.contains(post.postId) 
+                }
+                savedPosts = savedPostsList
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SavedPostsScreen", "Error loading saved posts: ${e.message}")
         }
-        savedPosts = posts
         isLoading = false
     }
     

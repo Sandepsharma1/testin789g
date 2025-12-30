@@ -4,14 +4,15 @@ package com.orignal.buddylynk.data.api
  * API Configuration for BuddyLynk
  * 
  * All API calls go through the secure backend - NO AWS keys here!
+ * SECURITY: Using HTTPS via custom domain with CloudFront
  */
 object ApiConfig {
-    // Direct EC2 access (CloudFront CDN available at d2cwas7x7omdpp.cloudfront.net)
-    const val BASE_URL = "http://52.0.95.126:3000"
+    // HTTPS via custom domain (CloudFront + ACM certificate)
+    const val BASE_URL = "https://app.buddylynk.com"
     const val API_URL = "$BASE_URL/api"
     
-    // Media CDN for images/videos
-    const val MEDIA_CDN_URL = "https://buddylynk-media-bucket-2024.s3.us-east-1.amazonaws.com"
+    // Media CDN for images/videos (S3 via CloudFront)
+    const val MEDIA_CDN_URL = "https://d2cwas7x7omdpp.cloudfront.net"
     
     // API Endpoints
     object Auth {
@@ -31,6 +32,9 @@ object ApiConfig {
         const val CREATE = "$API_URL/posts"
         fun getPost(postId: String) = "$API_URL/posts/$postId"
         fun likePost(postId: String) = "$API_URL/posts/$postId/like"
+        fun sharePost(postId: String) = "$API_URL/posts/$postId/share"
+        fun addComment(postId: String) = "$API_URL/posts/$postId/comment"
+        fun getComments(postId: String) = "$API_URL/posts/$postId/comments"
         fun userPosts(userId: String) = "$API_URL/posts/user/$userId"
     }
     

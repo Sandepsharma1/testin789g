@@ -24,6 +24,15 @@ android {
         buildConfigField("String", "API_BASE_URL", "\"${project.findProperty("API_BASE_URL") ?: "http://52.0.95.126:3000"}\"")
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("../buddylynk-release.jks")
+            storePassword = "buddylynk2024"
+            keyAlias = "buddylynk"
+            keyPassword = "buddylynk2024"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -35,13 +44,11 @@ android {
             // Enable additional security
             isDebuggable = false
             isJniDebuggable = false
-            renderscriptDebuggable = false
-            zipAlignEnabled = true
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false
             isDebuggable = true
-            applicationIdSuffix = ".debug"
         }
     }
     compileOptions {
@@ -55,6 +62,16 @@ android {
         compose = true
         buildConfig = true
     }
+    
+    // NDK configuration for native security module
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+    
+    ndkVersion = "26.1.10909125"
 }
 
 dependencies {
@@ -73,8 +90,12 @@ dependencies {
     // Animation
     implementation(libs.androidx.compose.animation)
     
-    // Image loading
+    // Image loading with blur support
     implementation(libs.coil.compose)
+    implementation("io.coil-kt:coil:2.5.0")
+    
+    // Blurry library for Android blur on all versions
+    implementation("jp.wasabeef:blurry:4.0.1")
     
     // Material Icons Extended
     implementation("androidx.compose.material:material-icons-extended")
@@ -136,6 +157,9 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.7.0"))
     implementation("com.google.firebase:firebase-analytics")
     implementation("com.google.firebase:firebase-messaging")
+    
+    // Play Integrity API (Anti-tampering)
+    implementation("com.google.android.play:integrity:1.3.0")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

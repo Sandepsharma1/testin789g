@@ -13,6 +13,29 @@
     public static int e(...);
 }
 
+# ========== ANTI-REVERSE ENGINEERING ==========
+
+# Obfuscate security-critical classes aggressively
+-keep,allowobfuscation class com.orignal.buddylynk.security.** { *; }
+-keepclassmembers class com.orignal.buddylynk.security.** {
+    private *;
+}
+
+# Hide API configuration (URLs, keys)
+-assumenosideeffects class com.orignal.buddylynk.data.api.ApiConfig {
+    public static final java.lang.String *;
+}
+
+# Remove debugging metadata
+-keepattributes !LocalVariableTable,!LocalVariableTypeTable
+
+# Encrypt string constants
+-adaptclassstrings
+-adaptresourcefilenames
+-adaptresourcefilecontents
+
+# ========== OBFUSCATION SETTINGS ==========
+
 # Keep essential classes
 -keep class com.orignal.buddylynk.data.model.** { *; }
 -keep class com.orignal.buddylynk.data.api.** { *; }
@@ -31,15 +54,13 @@
 -overloadaggressively
 -repackageclasses ''
 -allowaccessmodification
+-flattenpackagehierarchy ''
+-optimizationpasses 5
+-mergeinterfacesaggressively
 
 # Remove unused code
 -dontwarn **
 -ignorewarnings
-
-# Protect string constants
--adaptclassstrings
--adaptresourcefilenames
--adaptresourcefilecontents
 
 # ========== LIBRARY RULES ==========
 

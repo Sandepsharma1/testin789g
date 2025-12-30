@@ -33,7 +33,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import android.net.Uri
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import com.orignal.buddylynk.data.cache.VideoPlayerCache
+import com.orignal.buddylynk.data.cache.FeedPlayerManager
 import com.orignal.buddylynk.ui.viewmodel.TeamUpViewModel
 
 // Premium Colors
@@ -75,6 +89,16 @@ fun PremiumTeamUpScreen(
     DisposableEffect(Unit) {
         onDispose {
             onInnerViewChanged(false)
+        }
+    }
+    
+    // Keep screen awake while on TeamUp page
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
     
@@ -1094,21 +1118,78 @@ private fun TeamMessageBubble(message: TeamMessage) {
                                     contentScale = ContentScale.Crop
                                 )
                             } else if (media.type == "video") {
-                                // Video placeholder - show thumbnail or video icon
+                                // Video Player with pooled ExoPlayer (no re-buffering!)
+                                val context = LocalContext.current
+                                var isBuffering by remember { mutableStateOf(true) }
+                                var hasError by remember { mutableStateOf(false) }
+                                
+                                // Initialize and get player from pool
+                                FeedPlayerManager.init(context)
+                                
+                                @androidx.annotation.OptIn(UnstableApi::class)
+                                val exoPlayer = remember(media.url) {
+                                    FeedPlayerManager.getPlayer(
+                                        url = media.url,
+                                        onBufferingChange = { buffering -> isBuffering = buffering },
+                                        onError = { hasError = true }
+                                    )
+                                }
+                                
+                                // Pause when scrolled away (keep in pool for instant resume)
+                                DisposableEffect(media.url) {
+                                    onDispose { FeedPlayerManager.pausePlayer(media.url) }
+                                }
+                                
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(180.dp)
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(Zinc800),
-                                    contentAlignment = Alignment.Center
+                                        .background(Zinc800)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.PlayCircle,
-                                        contentDescription = "Video",
-                                        tint = CyanAccent,
-                                        modifier = Modifier.size(48.dp)
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            PlayerView(ctx).apply {
+                                                player = exoPlayer
+                                                useController = false
+                                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                                layoutParams = FrameLayout.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
                                     )
+                                    
+                                    // Loading indicator
+                                    if (isBuffering) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            CircularProgressIndicator(
+                                                color = CyanAccent,
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                    }
+                                    
+                                    // Video badge
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(8.dp)
+                                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                            .padding(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.PlayCircle,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                             if (index < message.media.size - 1) {

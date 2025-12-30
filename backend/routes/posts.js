@@ -47,43 +47,217 @@ function convertPostMediaUrls(post) {
         post.mediaUrls = post.mediaUrls.map(url => toCloudFrontUrl(url));
     }
 
+    // Set default NSFW flags (will be overridden by NSFW table lookup in feed endpoint)
+    if (post.isNSFW === undefined) post.isNSFW = false;
+    if (post.isSensitive === undefined) post.isSensitive = false;
+
     return post;
 }
 
 // Simple in-memory cache for feed
 let feedCache = null;
 let feedCacheTime = 0;
-const CACHE_TTL = 30000; // 30 seconds
+const CACHE_TTL = 5000; // 5 seconds - short TTL for fresh content
+
+// Function to clear feed cache (called when NSFW flags change)
+function clearFeedCache() {
+    feedCache = null;
+    feedCacheTime = 0;
+    console.log('[Feed] Cache cleared');
+}
+
+// Algorithm server URL for personalized recommendations
+const ALGORITHM_SERVER = 'http://54.235.126.186:8000';
+const http = require('http');
+
+// Helper to fetch recommendations from algorithm server
+async function fetchRecommendations(userId, limit = 20) {
+    return new Promise((resolve) => {
+        const url = `${ALGORITHM_SERVER}/api/recommendations/${userId}?limit=${limit}`;
+
+        const timeoutMs = 3000; // 3 second timeout
+        const req = http.get(url, { timeout: timeoutMs }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const result = JSON.parse(data);
+                    resolve(result);
+                } catch (e) {
+                    console.log('[Feed] Algorithm parse error:', e.message);
+                    resolve(null);
+                }
+            });
+        });
+
+        req.on('error', (e) => {
+            console.log('[Feed] Algorithm server error:', e.message);
+            resolve(null);
+        });
+
+        req.on('timeout', () => {
+            console.log('[Feed] Algorithm server timeout');
+            req.destroy();
+            resolve(null);
+        });
+    });
+}
 
 // Get feed posts (PUBLIC - no auth required for browsing)
+// Uses algorithm for logged-in users, chronological for guests
 router.get('/feed', async (req, res) => {
     try {
         const now = Date.now();
+        const userId = req.headers['x-user-id'] || req.query.userId;
+        const limit = parseInt(req.query.limit) || 100; // Default 100 posts for fast loading
+        const offset = parseInt(req.query.offset) || 0;
 
-        // Return cached response if valid
-        if (feedCache && (now - feedCacheTime) < CACHE_TTL) {
-            console.log('Serving cached feed');
-            return res.json(feedCache);
+        // Try algorithm-based recommendations for logged-in users
+        let algorithmRecommendations = null;
+        if (userId) {
+            console.log(`[Feed] Fetching recommendations for user: ${userId.substring(0, 8)}...`);
+            algorithmRecommendations = await fetchRecommendations(userId, limit);
         }
 
-        // Get posts (limited for performance)
-        const result = await docClient.send(new ScanCommand({
-            TableName: Tables.POSTS,
-            Limit: 50
-        }));
+        // Get posts from database - limit to 200 max per request for speed
+        const maxScan = Math.min(limit + 50, 200); // Fetch slightly more for variety
+        let allPosts = [];
+        let lastEvaluatedKey = undefined;
+        let scanCount = 0;
+        do {
+            const scanParams = {
+                TableName: Tables.POSTS,
+                Limit: 100, // Limit each scan for speed
+            };
+            if (lastEvaluatedKey) {
+                scanParams.ExclusiveStartKey = lastEvaluatedKey;
+            }
+            const postsResult = await docClient.send(new ScanCommand(scanParams));
+            allPosts = allPosts.concat(postsResult.Items || []);
+            lastEvaluatedKey = postsResult.LastEvaluatedKey;
+            console.log(`[Feed] Fetched ${postsResult.Items?.length || 0} posts (total: ${allPosts.length})`);
+        } while (lastEvaluatedKey);
 
-        let posts = (result.Items || []).sort((a, b) =>
-            new Date(b.createdAt) - new Date(a.createdAt)
-        );
+        console.log(`[Feed] Total posts fetched: ${allPosts.length}`);
 
-        // Convert all media URLs to CloudFront
-        posts = posts.map(convertPostMediaUrls);
+        // CRITICAL: Also fetch NSFW post IDs from NSFW table
+        let nsfwPostIds = new Set();
+        try {
+            const nsfwResult = await docClient.send(new ScanCommand({
+                TableName: 'Buddylynk_NSFW',
+                FilterExpression: 'isAdult = :adult',
+                ExpressionAttributeValues: { ':adult': true },
+                ProjectionExpression: 'postId'
+            }));
+            nsfwPostIds = new Set((nsfwResult.Items || []).map(item => item.postId));
+            console.log(`[Feed] Found ${nsfwPostIds.size} NSFW posts to flag`);
+        } catch (nsfwErr) {
+            console.error('[Feed] NSFW table query failed:', nsfwErr.message);
+        }
 
-        // Cache the result
-        feedCache = posts;
+        let posts = allPosts;
+
+        // Convert all media URLs to CloudFront and apply NSFW flags
+        posts = posts.map(post => {
+            const converted = convertPostMediaUrls(post);
+            // Override isNSFW if found in NSFW table
+            if (nsfwPostIds.has(converted.postId)) {
+                converted.isNSFW = true;
+                converted.isSensitive = true;
+            }
+            return converted;
+        });
+
+        // Build a map for quick lookups
+        const postMap = new Map(posts.map(p => [p.postId, p]));
+
+        // Sort posts based on algorithm recommendations OR chronological
+        let sortedPosts;
+        if (algorithmRecommendations && algorithmRecommendations.recommendations && algorithmRecommendations.recommendations.length > 0) {
+            // Use algorithm recommendations order
+            console.log(`[Feed] Using ${algorithmRecommendations.recommendations.length} algorithm recommendations`);
+
+            const recommendedIds = new Set(algorithmRecommendations.recommendations.map(r => r.contentId));
+
+            // Put recommended posts first (in algorithm order), then rest chronologically
+            const recommendedPosts = algorithmRecommendations.recommendations
+                .map(r => postMap.get(r.contentId))
+                .filter(p => p); // Filter out any null values
+
+            const otherPosts = posts
+                .filter(p => !recommendedIds.has(p.postId) && p.userId !== userId) // Exclude own posts
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            sortedPosts = [...recommendedPosts, ...otherPosts];
+        } else {
+            // Fallback: Chronological with randomization for variety
+            console.log('[Feed] Using chronological sort with variety');
+
+            // Group by user to avoid too many posts from same user
+            const postsByUser = {};
+            posts.forEach(p => {
+                if (!postsByUser[p.userId]) postsByUser[p.userId] = [];
+                postsByUser[p.userId].push(p);
+            });
+
+            // Sort each user's posts by date
+            Object.values(postsByUser).forEach(userPosts => {
+                userPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            });
+
+            // Interleave posts from different users for variety
+            sortedPosts = [];
+            let userIds = Object.keys(postsByUser);
+
+            // Shuffle userIds using Fisher-Yates for variety on each request
+            for (let i = userIds.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [userIds[i], userIds[j]] = [userIds[j], userIds[i]];
+            }
+
+            let round = 0;
+            // NO LIMIT on rounds - include ALL posts
+            while (sortedPosts.length < posts.length && round < 1000) {
+                for (const uid of userIds) {
+                    if (postsByUser[uid][round]) {
+                        sortedPosts.push(postsByUser[uid][round]);
+                    }
+                }
+                round++;
+            }
+
+            // Add slight randomization to break monotony - swap adjacent pairs with 30% chance
+            for (let i = 0; i < sortedPosts.length - 1; i += 2) {
+                if (Math.random() < 0.3) {
+                    [sortedPosts[i], sortedPosts[i + 1]] = [sortedPosts[i + 1], sortedPosts[i]];
+                }
+            }
+        }
+
+        // Apply pagination - slice the sorted posts based on limit and offset
+        const page = parseInt(req.query.page) || 0;
+        const pageSize = Math.min(limit, 50); // Max 50 per page for performance
+        const startIndex = page * pageSize;
+        const endIndex = startIndex + pageSize;
+        const paginatedPosts = sortedPosts.slice(startIndex, endIndex);
+        const hasMore = endIndex < sortedPosts.length;
+        const totalPosts = sortedPosts.length;
+
+        // Cache the full result (short TTL for freshness)
+        feedCache = sortedPosts;
         feedCacheTime = now;
 
-        res.json(posts);
+        // Return paginated response with metadata for infinite scroll
+        res.json({
+            posts: paginatedPosts,
+            pagination: {
+                page: page,
+                pageSize: pageSize,
+                hasMore: hasMore,
+                totalPosts: totalPosts,
+                nextPage: hasMore ? page + 1 : null
+            }
+        });
     } catch (err) {
         console.error('Feed error:', err);
         res.status(500).json({ error: 'Failed to load feed' });
@@ -142,17 +316,23 @@ router.get('/:postId', async (req, res) => {
     }
 });
 
-// Like post
+// Like post - adds user to likedBy array and increments likes count
 router.post('/:postId/like', verifyToken, async (req, res) => {
     try {
         const { postId } = req.params;
+        const userId = req.userId;
 
-        // Increment like count
+        // Add user to likedBy and increment likes count
         await docClient.send(new UpdateCommand({
             TableName: Tables.POSTS,
             Key: { postId },
-            UpdateExpression: 'SET likeCount = if_not_exists(likeCount, :zero) + :inc',
-            ExpressionAttributeValues: { ':inc': 1, ':zero': 0 }
+            UpdateExpression: 'SET likes = if_not_exists(likes, :zero) + :inc, likedBy = list_append(if_not_exists(likedBy, :empty), :user)',
+            ExpressionAttributeValues: {
+                ':inc': 1,
+                ':zero': 0,
+                ':empty': [],
+                ':user': [userId]
+            }
         }));
 
         res.json({ success: true });
@@ -162,17 +342,36 @@ router.post('/:postId/like', verifyToken, async (req, res) => {
     }
 });
 
-// Unlike post
+// Unlike post - removes user from likedBy and decrements likes count
 router.delete('/:postId/like', verifyToken, async (req, res) => {
     try {
         const { postId } = req.params;
+        const userId = req.userId;
 
+        // First get the post to find user index in likedBy
+        const getResult = await docClient.send(new GetCommand({
+            TableName: Tables.POSTS,
+            Key: { postId }
+        }));
+
+        if (!getResult.Item) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        const likedBy = getResult.Item.likedBy || [];
+        const userIndex = likedBy.indexOf(userId);
+
+        if (userIndex === -1) {
+            return res.json({ success: true }); // User hasn't liked this post
+        }
+
+        // Remove user from likedBy and decrement likes
         await docClient.send(new UpdateCommand({
             TableName: Tables.POSTS,
             Key: { postId },
-            UpdateExpression: 'SET likeCount = likeCount - :dec',
+            UpdateExpression: 'SET likes = likes - :dec REMOVE likedBy[' + userIndex + ']',
             ExpressionAttributeValues: { ':dec': 1 },
-            ConditionExpression: 'likeCount > :zero',
+            ConditionExpression: 'likes > :zero',
             ExpressionAttributeValues: { ':dec': 1, ':zero': 0 }
         }));
 
@@ -180,6 +379,79 @@ router.delete('/:postId/like', verifyToken, async (req, res) => {
     } catch (err) {
         console.error('Unlike error:', err);
         res.status(500).json({ error: 'Failed to unlike post' });
+    }
+});
+
+// Share post - increments shares count (no auth required for sharing)
+router.post('/:postId/share', async (req, res) => {
+    try {
+        const { postId } = req.params;
+
+        await docClient.send(new UpdateCommand({
+            TableName: Tables.POSTS,
+            Key: { postId },
+            UpdateExpression: 'SET shares = if_not_exists(shares, :zero) + :inc',
+            ExpressionAttributeValues: { ':inc': 1, ':zero': 0 }
+        }));
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Share error:', err);
+        res.status(500).json({ error: 'Failed to share post' });
+    }
+});
+
+// Add comment to post
+router.post('/:postId/comment', verifyToken, async (req, res) => {
+    try {
+        const { postId } = req.params;
+        const { text } = req.body;
+        const userId = req.userId;
+
+        if (!text || text.trim().length === 0) {
+            return res.status(400).json({ error: 'Comment text is required' });
+        }
+
+        const comment = {
+            commentId: uuidv4(),
+            userId,
+            text: text.trim(),
+            createdAt: new Date().toISOString()
+        };
+
+        await docClient.send(new UpdateCommand({
+            TableName: Tables.POSTS,
+            Key: { postId },
+            UpdateExpression: 'SET comments = list_append(if_not_exists(comments, :empty), :comment)',
+            ExpressionAttributeValues: {
+                ':empty': [],
+                ':comment': [comment]
+            }
+        }));
+
+        res.json({ success: true, comment });
+    } catch (err) {
+        console.error('Comment error:', err);
+        res.status(500).json({ error: 'Failed to add comment' });
+    }
+});
+
+// Get comments for post
+router.get('/:postId/comments', async (req, res) => {
+    try {
+        const { postId } = req.params;
+
+        const result = await docClient.send(new GetCommand({
+            TableName: Tables.POSTS,
+            Key: { postId },
+            ProjectionExpression: 'comments'
+        }));
+
+        const comments = result.Item?.comments || [];
+        res.json(comments);
+    } catch (err) {
+        console.error('Get comments error:', err);
+        res.status(500).json({ error: 'Failed to get comments' });
     }
 });
 
@@ -287,4 +559,5 @@ router.get('/saved/list', verifyToken, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.clearFeedCache = clearFeedCache;
 

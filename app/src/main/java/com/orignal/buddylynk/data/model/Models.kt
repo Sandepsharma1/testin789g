@@ -40,6 +40,8 @@ data class Post(
     val viewsCount: Int = 0,
     val isLiked: Boolean = false,
     val isBookmarked: Boolean = false,
+    val isNSFW: Boolean = false, // Admin-flagged 18+ content (from NSFW DynamoDB table)
+    val isSensitive: Boolean = false, // General sensitive content flag
     val createdAt: String = ""
 )
 

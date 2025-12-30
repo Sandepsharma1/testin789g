@@ -17,26 +17,32 @@ import java.util.concurrent.TimeUnit
  * NO AWS KEYS - All access via JWT-authenticated API calls
  * 
  * Security Features:
- * - Certificate Pinning (when using HTTPS)
+ * - HTTPS via CloudFront CDN
+ * - Certificate Pinning for CloudFront
  * - Request timeout limits
  * - No sensitive data logging in release builds
  */
 object ApiService {
     
-    // Certificate pinning for HTTPS endpoints (add your server's certificate hash)
-    // To get the hash, run: openssl s_client -connect yourdomain.com:443 | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+    // Certificate pinning for HTTPS
+    // Using Let's Encrypt certificates for app.buddylynk.com
     private val certificatePinner = CertificatePinner.Builder()
-        // Add your production domain certificate pins here when using HTTPS
-        // .add("yourdomain.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-        // .add("*.cloudfront.net", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=")
+        // Let's Encrypt certificate chain for app.buddylynk.com
+        .add("app.buddylynk.com", "sha256/kIdp6NNEd8rLSsI53aD5ESiJ4VNWq1EJVhmdOMj7JPs=")  // Let's Encrypt R3
+        .add("app.buddylynk.com", "sha256/JSMzqOOrtyOT1kmau6zKhgT676hGgczD5VMdRMyJZFA=")  // ISRG Root X1
+        .add("app.buddylynk.com", "sha256/C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=")  // ISRG Root X1 backup
+        // CloudFront for media CDN
+        .add("*.cloudfront.net", "sha256/kIdp6NNEd8rLSsl53aD5ESiJ4VNWq1EJVhmdOMj7JPs=")
+        .add("*.cloudfront.net", "sha256/JSMzqOOrtyOT1kmau6zKhgT676hGgczD5VMdRMyJZFA=")
+        .add("*.cloudfront.net", "sha256/++MBgDH5WGvL9Bcn5Be30cRcL0f5O+NyoXuWtQdX1aI=")
         .build()
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        // Enable certificate pinning when using HTTPS
-        // .certificatePinner(certificatePinner)
+        // SECURITY: Certificate pinning enabled for HTTPS
+        .certificatePinner(certificatePinner)
         .build()
     
     private var authToken: String? = null
@@ -232,23 +238,55 @@ object ApiService {
     
     // ========== POSTS ==========
     
-    suspend fun getFeed(): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+    // Data class for paginated feed response
+    data class FeedResponse(
+        val posts: List<JSONObject>,
+        val hasMore: Boolean,
+        val nextPage: Int?,
+        val totalPosts: Int
+    )
+    
+    suspend fun getFeed(page: Int = 0, limit: Int = 30): Result<FeedResponse> = withContext(Dispatchers.IO) {
         try {
-            Log.d("ApiService", "getFeed: Calling ${ApiConfig.Posts.FEED}")
-            val request = buildAuthRequest(ApiConfig.Posts.FEED).get().build()
+            val url = "${ApiConfig.Posts.FEED}?page=$page&limit=$limit"
+            Log.d("ApiService", "getFeed: Calling $url")
+            val request = buildAuthRequest(url).get().build()
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: "[]"
+            val body = response.body?.string() ?: "{}"
             
             Log.d("ApiService", "getFeed: Response code=${response.code}, body length=${body.length}")
             
             if (response.isSuccessful) {
-                val array = JSONArray(body)
+                // Handle both old array format and new paginated format
                 val posts = mutableListOf<JSONObject>()
-                for (i in 0 until array.length()) {
-                    posts.add(array.getJSONObject(i))
+                var hasMore = false
+                var nextPage: Int? = null
+                var totalPosts = 0
+                
+                try {
+                    // Try new paginated format first
+                    val json = JSONObject(body)
+                    if (json.has("posts")) {
+                        val postsArray = json.getJSONArray("posts")
+                        for (i in 0 until postsArray.length()) {
+                            posts.add(postsArray.getJSONObject(i))
+                        }
+                        val pagination = json.optJSONObject("pagination")
+                        hasMore = pagination?.optBoolean("hasMore", false) ?: false
+                        nextPage = if (pagination?.isNull("nextPage") == false) pagination.optInt("nextPage") else null
+                        totalPosts = pagination?.optInt("totalPosts", posts.size) ?: posts.size
+                    }
+                } catch (e: Exception) {
+                    // Fallback: old array format
+                    val array = JSONArray(body)
+                    for (i in 0 until array.length()) {
+                        posts.add(array.getJSONObject(i))
+                    }
+                    totalPosts = posts.size
                 }
-                Log.d("ApiService", "getFeed: Parsed ${posts.size} posts successfully")
-                Result.success(posts)
+                
+                Log.d("ApiService", "getFeed: Parsed ${posts.size} posts, hasMore=$hasMore, total=$totalPosts")
+                Result.success(FeedResponse(posts, hasMore, nextPage, totalPosts))
             } else {
                 Log.e("ApiService", "getFeed: Failed with code ${response.code}, body: ${body.take(200)}")
                 Result.failure(Exception("Failed to load feed: ${response.code}"))
@@ -288,6 +326,36 @@ object ApiService {
         try {
             val request = buildAuthRequest(ApiConfig.Posts.likePost(postId))
                 .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            
+            val response = client.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun sharePost(postId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest(ApiConfig.Posts.sharePost(postId))
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            
+            val response = client.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun addComment(postId: String, text: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val json = org.json.JSONObject().apply {
+                put("text", text)
+            }
+            
+            val request = buildAuthRequest(ApiConfig.Posts.addComment(postId))
+                .post(json.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             
             val response = client.newCall(request).execute()
@@ -578,17 +646,22 @@ object ApiService {
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: "[]"
             
+            android.util.Log.d("ApiService", "getBlockedUsers response: code=${response.code}, body=$body")
+            
             if (response.isSuccessful) {
                 val array = JSONArray(body)
                 val blocked = mutableListOf<String>()
                 for (i in 0 until array.length()) {
                     blocked.add(array.getString(i))
                 }
+                android.util.Log.d("ApiService", "Parsed ${blocked.size} blocked users: $blocked")
                 Result.success(blocked)
             } else {
-                Result.failure(Exception("Failed to get blocked users"))
+                android.util.Log.e("ApiService", "getBlockedUsers failed: ${response.code} - $body")
+                Result.failure(Exception("Failed to get blocked users: ${response.code}"))
             }
         } catch (e: Exception) {
+            android.util.Log.e("ApiService", "getBlockedUsers exception: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -610,6 +683,29 @@ object ApiService {
             val request = buildAuthRequest("${ApiConfig.API_URL}/blocks/$userId").delete().build()
             val response = client.newCall(request).execute()
             Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    // ========== LIKED POSTS ==========
+    
+    suspend fun getLikedPostIds(): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/posts/liked/list").get().build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "[]"
+            
+            if (response.isSuccessful) {
+                val array = JSONArray(body)
+                val liked = mutableListOf<String>()
+                for (i in 0 until array.length()) {
+                    liked.add(array.getString(i))
+                }
+                Result.success(liked)
+            } else {
+                Result.failure(Exception("Failed to get liked posts"))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

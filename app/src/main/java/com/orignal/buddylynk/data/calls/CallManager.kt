@@ -36,14 +36,14 @@ data class CallSession(
 
 /**
  * CallManager - Production Socket.IO Signaling for Video/Voice Calls
- * Connects to EC2 backend at 52.0.95.126:3000
+ * Connects to EC2 backend via CloudFront HTTPS
  */
 object CallManager {
     private const val TAG = "CallManager"
     private val scope = CoroutineScope(Dispatchers.Main)
     
-    // Production server URL
-    private const val SIGNALING_URL = "http://52.0.95.126:3000"
+    // SECURITY: HTTPS via custom domain
+    private const val SIGNALING_URL = "https://app.buddylynk.com"
     
     private var socket: Socket? = null
     private var isConnected = false

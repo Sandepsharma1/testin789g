@@ -29,7 +29,7 @@ object ShareService {
      * Share post link
      */
     fun sharePostLink(context: Context, postId: String, postContent: String?) {
-        val deepLink = "https://buddylynk.app/post/$postId"
+        val deepLink = "https://app.buddylynk.com/post/$postId"
         val shareText = buildString {
             postContent?.take(100)?.let { 
                 append(it)
@@ -47,7 +47,7 @@ object ShareService {
      * Share user profile link
      */
     fun shareProfileLink(context: Context, userId: String, username: String) {
-        val deepLink = "https://buddylynk.app/user/$userId"
+        val deepLink = "https://app.buddylynk.com/user/$userId"
         val shareText = "Check out @$username on BuddyLynk!\n$deepLink"
         
         shareText(context, shareText, "Share Profile")
@@ -129,7 +129,7 @@ object ShareService {
      * Generate web link
      */
     fun getWebLink(path: String): String {
-        return "https://buddylynk.app/$path"
+        return "https://app.buddylynk.com/$path"
     }
 }
 
@@ -158,7 +158,7 @@ object DeepLinkHandler {
         }
         
         // Handle https://buddylynk.app scheme
-        if (scheme in listOf("http", "https") && host == "buddylynk.app") {
+        if (scheme in listOf("http", "https") && host == "app.buddylynk.com") {
             return when (path.firstOrNull()) {
                 "post" -> path.getOrNull(1)?.let { DeepLinkDestination.Post(it) }
                 "user" -> path.getOrNull(1)?.let { DeepLinkDestination.Profile(it) }

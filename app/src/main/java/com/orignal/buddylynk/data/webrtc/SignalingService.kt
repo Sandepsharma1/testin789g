@@ -12,11 +12,12 @@ import org.webrtc.SessionDescription
 
 /**
  * Socket.io Signaling Service for WebRTC calls
- * Connects to EC2 server for call signaling
+ * Connects to EC2 server via CloudFront HTTPS for call signaling
  */
 object SignalingService {
     private const val TAG = "SignalingService"
-    private const val SERVER_URL = "http://52.0.95.126:3000"
+    // SECURITY: Using HTTPS via custom domain
+    private const val SERVER_URL = "https://app.buddylynk.com"
     
     private var socket: Socket? = null
     private var authToken: String? = null

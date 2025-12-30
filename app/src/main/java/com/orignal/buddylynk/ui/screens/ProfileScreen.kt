@@ -370,21 +370,8 @@ private fun FuturisticHeader(
             )
         }
         
-        // Settings button only
-        IconButton(
-            onClick = onNavigateToSettings,
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.05f))
-                .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.MoreVert,
-                contentDescription = "Settings",
-                tint = Color.Gray
-            )
-        }
+        // Empty spacer for alignment (removed 3-dot menu)
+        Spacer(modifier = Modifier.size(44.dp))
     }
 }
 

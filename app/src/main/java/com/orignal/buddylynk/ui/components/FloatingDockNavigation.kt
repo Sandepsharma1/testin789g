@@ -28,12 +28,13 @@ private val CyanAccent = Color(0xFF00D9FF)
 
 /**
  * Floating Dock Navigation matching React design
- * Centered floating pill with 5 nav items
+ * Centered floating pill with 5 nav items + menu
  */
 @Composable
 fun FloatingDockNavigation(
     currentRoute: String,
     onNavigate: (String) -> Unit,
+    onMenuClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val navItems = listOf(
@@ -41,7 +42,7 @@ fun FloatingDockNavigation(
         DockNavItem("search", Icons.Outlined.Search, Icons.Filled.Search),
         DockNavItem("shorts", Icons.Outlined.Bolt, Icons.Filled.Bolt), // Zap equivalent
         DockNavItem("teamup", Icons.Outlined.Groups, Icons.Filled.Groups), // TeamUp
-        DockNavItem("chatlist", Icons.Outlined.ChatBubbleOutline, Icons.Filled.Chat)
+        DockNavItem("menu", Icons.Outlined.Menu, Icons.Filled.Menu) // Menu drawer
     )
 
     Box(
@@ -68,8 +69,14 @@ fun FloatingDockNavigation(
                 
                 DockNavButton(
                     item = item,
-                    isSelected = isSelected,
-                    onClick = { onNavigate(item.route) }
+                    isSelected = isSelected && item.route != "menu", // Menu never stays selected
+                    onClick = { 
+                        if (item.route == "menu") {
+                            onMenuClick()
+                        } else {
+                            onNavigate(item.route)
+                        }
+                    }
                 )
             }
         }

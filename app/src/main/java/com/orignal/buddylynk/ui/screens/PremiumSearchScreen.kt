@@ -77,6 +77,15 @@ fun PremiumSearchScreen(
     val likedPosts = remember { mutableStateListOf<String>() }
     val savedPosts = remember { mutableStateListOf<String>() }
     val followingUsers = remember { mutableStateListOf<String>() }
+    
+    // Keep screen awake while on search page
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     Box(
         modifier = Modifier

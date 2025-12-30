@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +59,7 @@ fun HomeScreen(
     onNavigateToEvents: () -> Unit = {},
     onNavigateToChat: () -> Unit = {},
     onNavigateToUserProfile: (String) -> Unit = {},
+    onNavigateToShorts: () -> Unit = {}, // Navigate to Shorts screen
     viewModel: HomeViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -102,9 +104,158 @@ fun HomeScreen(
         }
     }
     
+    // Keep screen awake while on home page (like TikTok/Instagram)
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+    
     // Responsive screen info
     val screenInfo = com.orignal.buddylynk.ui.utils.rememberScreenInfo()
     val dims = screenInfo.dimensions
+    
+    // Active server health check state
+    // Start with true (assume online) - only show error on confirmed failure
+    var isServerOnline by remember { mutableStateOf(true) }
+    var isCheckingServer by remember { mutableStateOf(false) }
+    var hasCheckedOnce by remember { mutableStateOf(false) }
+    var showServerErrorSnackbar by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    
+    // Continuous server health check - polls every 30 seconds
+    LaunchedEffect(Unit) {
+        // Initial check
+        isCheckingServer = true
+        try {
+            val isHealthy = com.orignal.buddylynk.data.network.ServerHealthObserver.checkServerHealth()
+            isServerOnline = isHealthy
+            hasCheckedOnce = true
+            android.util.Log.d("HomeScreen", "Initial server health check: $isHealthy")
+        } catch (e: Exception) {
+            isServerOnline = false
+            hasCheckedOnce = true
+            android.util.Log.e("HomeScreen", "Server health check failed: ${e.message}")
+        }
+        isCheckingServer = false
+        
+        // Continuous polling every 30 seconds
+        while (true) {
+            kotlinx.coroutines.delay(30_000L) // 30 seconds
+            try {
+                val isHealthy = com.orignal.buddylynk.data.network.ServerHealthObserver.checkServerHealth()
+                isServerOnline = isHealthy
+                android.util.Log.d("HomeScreen", "Periodic health check: online=$isHealthy")
+            } catch (e: Exception) {
+                isServerOnline = false
+                android.util.Log.e("HomeScreen", "Periodic health check failed: ${e.message}")
+            }
+        }
+    }
+    
+    // Server down state - shows when server is confirmed offline after health check
+    val isServerDown = !isServerOnline && hasCheckedOnce && !isLoading
+    
+    // Show ServerDownScreen if server is down
+    if (isServerDown) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ServerDownScreen(
+                onRetry = { 
+                    isCheckingServer = true
+                    // Re-check server on retry
+                    scope.launch {
+                        try {
+                            val isHealthy = com.orignal.buddylynk.data.network.ServerHealthObserver.checkServerHealth()
+                            isServerOnline = isHealthy
+                            if (isHealthy) {
+                                // Server is back! Refresh posts
+                                viewModel.refresh()
+                            } else {
+                                // Still down - show snackbar
+                                showServerErrorSnackbar = true
+                            }
+                        } catch (e: Exception) {
+                            isServerOnline = false
+                            showServerErrorSnackbar = true
+                        }
+                        isCheckingServer = false
+                    }
+                },
+                isRetrying = isCheckingServer
+            )
+            
+            // Custom styled popup at the top
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showServerErrorSnackbar,
+                enter = androidx.compose.animation.slideInVertically(
+                    initialOffsetY = { -it }
+                ) + androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.slideOutVertically(
+                    targetOffsetY = { -it }
+                ) + androidx.compose.animation.fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp, start = 24.dp, end = 24.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color(0xFFDC2626),
+                                    Color(0xFFB91C1C)
+                                )
+                            )
+                        )
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Warning icon
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "⚠️",
+                                fontSize = 18.sp
+                            )
+                        }
+                        
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Connection Failed",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Server is still not responding",
+                                fontSize = 13.sp,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
+                }
+                
+                // Auto-dismiss after 3 seconds
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(3000)
+                    showServerErrorSnackbar = false
+                }
+            }
+        }
+        return
+    }
     
     AnimatedGradientBackground(
         modifier = Modifier.fillMaxSize()
@@ -123,9 +274,38 @@ fun HomeScreen(
                 onNotificationClick = { /* TODO */ },
                 onProfileClick = onNavigateToProfile
             )
-            
+        
             // Smooth scroll state for buttery scrolling
             val listState = rememberLazyListState()
+            
+            // Track which post is most visible (for video playback like Instagram)
+            // Simplified calculation for better scroll performance
+            val visiblePostIndex by remember {
+                derivedStateOf {
+                    // Use first visible item for simpler/faster calculation
+                    val firstVisibleIndex = listState.firstVisibleItemIndex
+                    // Subtract 1 for header item to get actual post index
+                    maxOf(firstVisibleIndex - 1, 0)
+                }
+            }
+            
+            // Collect pagination states for infinite scroll
+            val hasMorePosts by viewModel.hasMorePosts.collectAsState()
+            val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+            
+            // Infinite scroll: Load more when near bottom
+            LaunchedEffect(listState) {
+                snapshotFlow {
+                    val layoutInfo = listState.layoutInfo
+                    val totalItems = layoutInfo.totalItemsCount
+                    val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    lastVisibleIndex >= totalItems - 5 // Trigger when 5 items from end
+                }.collect { shouldLoadMore ->
+                    if (shouldLoadMore && hasMorePosts && !isLoadingMore) {
+                        viewModel.loadMorePosts()
+                    }
+                }
+            }
             
             // Content - responsive padding with smooth scrolling
             LazyColumn(
@@ -182,13 +362,14 @@ fun HomeScreen(
                 
                 // Real posts from AWS - Premium Cards with Action Capsule
                 if (posts.isNotEmpty()) {
-                    items(posts, key = { it.postId }) { post ->
+                    itemsIndexed(posts, key = { _, post -> post.postId }) { index, post ->
                         PremiumPostCard(
                             post = post,
                             isLiked = post.isLiked,
                             isSaved = post.isBookmarked,
                             hasStatus = false, // TODO: Check if user has active story
                             isOwner = post.userId == viewModel.currentUserId,
+                            isVisible = index == visiblePostIndex, // Only play video when this post is visible
                             onLike = { viewModel.likePost(post.postId) },
                             onSave = { viewModel.bookmarkPost(post.postId) },
                             onComment = { 
@@ -199,13 +380,24 @@ fun HomeScreen(
                             onShare = { 
                                 // Increment share count first
                                 viewModel.sharePost(post.postId)
-                                // Then open Android share sheet
+                                // Build share text with app.buddylynk.com link
+                                val deepLink = "https://app.buddylynk.com/post/${post.postId}"
+                                val shareText = buildString {
+                                    post.content?.take(100)?.let {
+                                        append(it)
+                                        if (it.length >= 100) append("...")
+                                        append("\n\n")
+                                    }
+                                    append("Check out this post on BuddyLynk!\n")
+                                    append(deepLink)
+                                }
+                                // Open Android share sheet
                                 val sendIntent = Intent().apply {
                                     action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, "Check out this post on BuddyLynk!")
+                                    putExtra(Intent.EXTRA_TEXT, shareText)
                                     type = "text/plain"
                                 }
-                                context.startActivity(Intent.createChooser(sendIntent, null))
+                                context.startActivity(Intent.createChooser(sendIntent, "Share Post"))
                             },
                             onUserClick = { userId -> onNavigateToUserProfile(userId) },
                             onEdit = { 
@@ -222,7 +414,8 @@ fun HomeScreen(
                                 viewModel.blockUser(post.userId)
                                 android.widget.Toast.makeText(context, "User blocked", android.widget.Toast.LENGTH_SHORT).show()
                             },
-                            onAvatarLongPress = { /* TODO: Show story */ }
+                            onAvatarLongPress = { /* TODO: Show story */ },
+                            onNavigateToShorts = onNavigateToShorts
                         )
                         Spacer(modifier = Modifier.height(40.dp))
                     }
@@ -257,6 +450,24 @@ fun HomeScreen(
                                     color = TextTertiary
                                 )
                             }
+                        }
+                    }
+                }
+                
+                // Loading more indicator for infinite scroll
+                if (isLoadingMore) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = VibrantPurple,
+                                strokeWidth = 3.dp
+                            )
                         }
                     }
                 }
@@ -1164,51 +1375,270 @@ private fun RealFeedCard(
                     DropdownMenu(
                         expanded = showOptionsMenu,
                         onDismissRequest = { showOptionsMenu = false },
-                        modifier = Modifier.background(DarkSurface)
+                        modifier = Modifier
+                            .widthIn(min = 220.dp, max = 260.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color(0xFF0D0D1A)) // Solid base
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color(0xFF252545).copy(alpha = 0.98f),
+                                        Color(0xFF1A1A35),
+                                        Color(0xFF0F0F20)
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 1.dp,
+                                brush = Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF8B5CF6).copy(alpha = 0.5f),
+                                        Color(0xFFEC4899).copy(alpha = 0.3f),
+                                        Color(0xFF6366F1).copy(alpha = 0.4f)
+                                    )
+                                ),
+                                shape = RoundedCornerShape(18.dp)
+                            )
+                            .padding(vertical = 8.dp, horizontal = 6.dp)
                     ) {
                         if (isOwnPost) {
-                            // Own post options
+                            // Edit option - compact
                             DropdownMenuItem(
                                 text = { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Outlined.Edit, null, tint = TextPrimary, modifier = Modifier.size(20.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    Brush.radialGradient(
+                                                        colors = listOf(
+                                                            Color(0xFF6366F1).copy(alpha = 0.3f),
+                                                            Color(0xFF8B5CF6).copy(alpha = 0.15f)
+                                                        )
+                                                    )
+                                                )
+                                                .border(
+                                                    width = 0.5.dp,
+                                                    color = Color(0xFF818CF8).copy(alpha = 0.3f),
+                                                    shape = RoundedCornerShape(10.dp)
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Edit, 
+                                                null, 
+                                                tint = Color(0xFF818CF8),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                         Spacer(Modifier.width(12.dp))
-                                        Text("Edit Post", color = TextPrimary)
+                                        Column {
+                                            Text(
+                                                "Edit Post", 
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Medium,
+                                                fontSize = 14.sp
+                                            )
+                                            Text(
+                                                "Modify content", 
+                                                color = Color.White.copy(alpha = 0.45f),
+                                                fontSize = 11.sp
+                                            )
+                                        }
                                     }
                                 },
                                 onClick = { showOptionsMenu = false; onEdit() }
                             )
+                            
+                            // Divider
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 6.dp)
+                                    .height(1.dp)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.White.copy(alpha = 0.08f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+                            
+                            // Delete option with premium styling
                             DropdownMenuItem(
                                 text = { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Outlined.Delete, null, tint = LikeRed, modifier = Modifier.size(20.dp))
-                                        Spacer(Modifier.width(12.dp))
-                                        Text("Delete Post", color = LikeRed)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(
+                                                            Color(0xFFEF4444).copy(alpha = 0.25f),
+                                                            Color(0xFFDC2626).copy(alpha = 0.15f)
+                                                        )
+                                                    )
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Delete, 
+                                                null, 
+                                                tint = Color(0xFFF87171),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.width(14.dp))
+                                        Column {
+                                            Text(
+                                                "Delete Post", 
+                                                color = Color(0xFFF87171),
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 15.sp
+                                            )
+                                            Text(
+                                                "Remove permanently", 
+                                                color = Color(0xFFEF4444).copy(alpha = 0.5f),
+                                                fontSize = 12.sp
+                                            )
+                                        }
                                     }
                                 },
                                 onClick = { showOptionsMenu = false; showDeleteConfirmation = true }
                             )
                         } else {
-                            // Other user's post options
+                            // Report option with premium styling
                             DropdownMenuItem(
                                 text = { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Outlined.Block, null, tint = TextPrimary, modifier = Modifier.size(20.dp))
-                                        Spacer(Modifier.width(12.dp))
-                                        Text("Block User", color = TextPrimary)
-                                    }
-                                },
-                                onClick = { showOptionsMenu = false; showBlockConfirmation = true }
-                            )
-                            DropdownMenuItem(
-                                text = { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Outlined.Flag, null, tint = GradientOrange, modifier = Modifier.size(20.dp))
-                                        Spacer(Modifier.width(12.dp))
-                                        Text("Report Post", color = GradientOrange)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(
+                                                            Color(0xFFFBBF24).copy(alpha = 0.25f),
+                                                            Color(0xFFF59E0B).copy(alpha = 0.15f)
+                                                        )
+                                                    )
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Flag, 
+                                                null, 
+                                                tint = Color(0xFFFCD34D),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.width(14.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Report Post", 
+                                                color = Color.White,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 15.sp
+                                            )
+                                            Text(
+                                                "Report inappropriate content", 
+                                                color = Color.White.copy(alpha = 0.5f),
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                        Icon(
+                                            Icons.Filled.ChevronRight,
+                                            null,
+                                            tint = Color.White.copy(alpha = 0.3f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
                                 },
                                 onClick = { showOptionsMenu = false; onReportPost() }
+                            )
+                            
+                            // Divider
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 6.dp)
+                                    .height(1.dp)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.White.copy(alpha = 0.08f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+                            
+                            // Block option with premium styling
+                            DropdownMenuItem(
+                                text = { 
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(
+                                                            Color(0xFFEF4444).copy(alpha = 0.25f),
+                                                            Color(0xFFDC2626).copy(alpha = 0.15f)
+                                                        )
+                                                    )
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Block, 
+                                                null, 
+                                                tint = Color(0xFFF87171),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.width(14.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Block User", 
+                                                color = Color(0xFFF87171),
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 15.sp
+                                            )
+                                            Text(
+                                                "Hide all their content", 
+                                                color = Color(0xFFEF4444).copy(alpha = 0.5f),
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                        Icon(
+                                            Icons.Filled.ChevronRight,
+                                            null,
+                                            tint = Color.White.copy(alpha = 0.3f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                onClick = { showOptionsMenu = false; showBlockConfirmation = true }
                             )
                         }
                     }

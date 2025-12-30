@@ -1,9 +1,0 @@
-﻿--------- beginning of main
-12-20 01:00:33.060   804  2080 E HWComposer: getSupportedContentTypes: getSupportedContentTypes failed for display 0: Unsupported (8)
-12-20 01:00:33.112  6481  6576 E PersonaManagerService: DeviceLocked : true, DeviceSecure : true
-12-20 01:00:33.117  6481  6481 E PersonaManagerService: DeviceLocked : true, DeviceSecure : true
-12-20 01:00:33.165  6255 23060 E (FPLOG) : 2.0.36.0 DeviceSetClock 1
-12-20 01:00:33.245  6255 23060 E (FPLOG) : DeviceEEPROMEnable start tz 1
-12-20 01:00:33.245  6255 23060 E (FPLOG) : DeviceEEPROMEnable end
-12-20 01:00:33.273  6255 23060 E (FPLOG) : DeviceEEPROMEnable start tz 0
-12-20 01:00:33.274  6255 23060 E (FPLOG) : DeviceEEPROMEnable end

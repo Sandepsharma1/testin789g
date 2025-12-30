@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -62,6 +63,27 @@ fun PremiumHomeHeader(
         delay(4800)
         showLogo = false
     }
+    
+    // Smooth alpha animation for logo (no layout recalculations)
+    val logoAlpha by animateFloatAsState(
+        targetValue = if (showLogo) 1f else 0f,
+        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+        label = "logoAlpha"
+    )
+    
+    // Smooth logo width animation
+    val logoWidth by animateDpAsState(
+        targetValue = if (showLogo) 48.dp else 0.dp,
+        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+        label = "logoWidth"
+    )
+    
+    // Smooth font size animation
+    val fontSize by animateFloatAsState(
+        targetValue = if (showLogo) 18f else 24f,
+        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+        label = "fontSize"
+    )
 
     Row(
         modifier = modifier
@@ -76,22 +98,24 @@ fun PremiumHomeHeader(
         Row(
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Animated Logo (shows for 4.8s, then hides)
-            AnimatedVisibility(
-                visible = showLogo,
-                enter = fadeIn() + expandHorizontally(),
-                exit = fadeOut() + shrinkHorizontally()
-            ) {
-                AnimatedBuddyLynkLogo(
-                    modifier = Modifier.padding(end = 8.dp),
-                    size = 40.dp
-                )
+            // Animated Logo (fades out smoothly - no layout jumps)
+            if (logoWidth > 0.dp) {
+                Box(
+                    modifier = Modifier
+                        .width(logoWidth)
+                        .graphicsLayer { alpha = logoAlpha }
+                ) {
+                    AnimatedBuddyLynkLogo(
+                        modifier = Modifier.padding(end = 8.dp),
+                        size = 40.dp
+                    )
+                }
             }
 
             // Brand Name with Gradient (always visible, expands when logo hides)
             Text(
                 text = "Buddylynk",
-                fontSize = if (showLogo) 18.sp else 24.sp,
+                fontSize = fontSize.sp,
                 fontWeight = FontWeight.Bold,
                 style = LocalTextStyle.current.copy(
                     brush = Brush.linearGradient(

@@ -1,5 +1,6 @@
 package com.orignal.buddylynk.ui.components
 
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -17,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
@@ -34,12 +36,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.orignal.buddylynk.data.cache.VideoPlayerCache
+import com.orignal.buddylynk.data.cache.FeedPlayerManager
 import com.orignal.buddylynk.data.model.Post
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -106,6 +112,7 @@ fun PremiumPostCard(
     isSaved: Boolean,
     hasStatus: Boolean = false,
     isOwner: Boolean = false,
+    isVisible: Boolean = true, // Only play video when visible on screen
     onLike: () -> Unit,
     onSave: () -> Unit,
     onComment: () -> Unit,
@@ -117,11 +124,29 @@ fun PremiumPostCard(
     onReport: () -> Unit = {},
     onBlock: () -> Unit = {},
     onAvatarLongPress: () -> Unit = {},
+    onNavigateToShorts: () -> Unit = {}, // Navigate to Shorts when video is long pressed
     modifier: Modifier = Modifier
 ) {
     var showLikeAnimation by remember { mutableStateOf(false) }
     var cardScale by remember { mutableStateOf(1f) }
+    var isFullscreen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    
+    // NSFW content handling - check admin flags and user settings
+    val sensitiveMode by com.orignal.buddylynk.data.settings.SensitiveContentManager.contentMode.collectAsState()
+    val isNSFWContent = post.isNSFW || post.isSensitive
+    var showNSFWContent by remember(post.postId) { mutableStateOf(false) } // User clicked "Show" - keyed by postId to persist
+    
+    // Determine if we should hide/blur this post
+    val shouldHidePost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE && !showNSFWContent
+    val shouldBlurPost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR && !showNSFWContent
+    
+    // Debug logging for NSFW
+    LaunchedEffect(post.postId, isNSFWContent, sensitiveMode) {
+        if (post.isNSFW || post.isSensitive) {
+            android.util.Log.d("NSFW_DEBUG", "Post ${post.postId.take(8)}: isNSFW=${post.isNSFW}, isSensitive=${post.isSensitive}, mode=$sensitiveMode, shouldBlur=$shouldBlurPost, shouldHide=$shouldHidePost")
+        }
+    }
 
     // Animate card scale
     val animatedScale by animateFloatAsState(
@@ -143,20 +168,300 @@ fun PremiumPostCard(
             cardScale = 1f
         }
     }
+    
+    // Production-ready fullscreen overlay using Dialog
+    if (isFullscreen) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { isFullscreen = false },
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false // Full width
+            )
+        ) {
+            // Immersive fullscreen container
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .systemBarsPadding(),
+                contentAlignment = Alignment.Center
+            ) {
+                // Get all media URLs
+                val allMediaUrls = if (post.mediaUrls.isNotEmpty()) {
+                    post.mediaUrls
+                } else if (!post.mediaUrl.isNullOrBlank()) {
+                    listOf(post.mediaUrl)
+                } else {
+                    emptyList()
+                }
+                
+                val firstMediaUrl = allMediaUrls.firstOrNull()
+                val isVideo = firstMediaUrl?.let { url ->
+                    url.endsWith(".mp4", ignoreCase = true) ||
+                    url.endsWith(".webm", ignoreCase = true) ||
+                    url.endsWith(".mov", ignoreCase = true) ||
+                    post.mediaType == "video"
+                } ?: false
+                
+                if (allMediaUrls.isNotEmpty()) {
+                    if (isVideo && firstMediaUrl != null) {
+                        // Fullscreen video player
+                        val context = LocalContext.current
+                        FeedPlayerManager.init(context)
+                        
+                        @androidx.annotation.OptIn(UnstableApi::class)
+                        val fullscreenPlayer = remember(firstMediaUrl) {
+                            FeedPlayerManager.getPlayer(
+                                url = firstMediaUrl,
+                                onBufferingChange = { },
+                                onError = { }
+                            )
+                        }
+                        
+                        fullscreenPlayer?.let { player ->
+                            player.volume = 1f // Unmute in fullscreen
+                            player.playWhenReady = true
+                            
+                            AndroidView(
+                                factory = { ctx ->
+                                    PlayerView(ctx).apply {
+                                        this.player = player
+                                        useController = true // Show controls in fullscreen
+                                        controllerShowTimeoutMs = 3000
+                                        controllerAutoShow = true
+                                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        setBackgroundColor(android.graphics.Color.BLACK)
+                                        layoutParams = FrameLayout.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    } else {
+                        // Fullscreen image gallery with HorizontalPager
+                        val fullscreenPagerState = androidx.compose.foundation.pager.rememberPagerState { allMediaUrls.size }
+                        
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            androidx.compose.foundation.pager.HorizontalPager(
+                                state = fullscreenPagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                val imageUrl = allMediaUrls[page]
+                                AsyncImage(
+                                    model = ImageRequest.Builder(LocalContext.current)
+                                        .data(imageUrl)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = "Fullscreen image ${page + 1}",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(onTap = { isFullscreen = false })
+                                        },
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
+                            
+                            // Page indicator for multiple images
+                            if (allMediaUrls.size > 1) {
+                                Row(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 40.dp)
+                                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    repeat(allMediaUrls.size) { index ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(if (fullscreenPagerState.currentPage == index) 8.dp else 6.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (fullscreenPagerState.currentPage == index) 
+                                                        CyanGlow else Color.White.copy(alpha = 0.5f)
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Premium close button with glassmorphism
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 24.dp, end = 16.dp)
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.2f),
+                                    Color.White.copy(alpha = 0.1f)
+                                )
+                            )
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                        .clickable { isFullscreen = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                
+                // User info at bottom
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
+                            )
+                        )
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // User avatar
+                        AsyncImage(
+                            model = post.userAvatar,
+                            contentDescription = "User",
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .border(2.dp, CyanGlow, CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        
+                        Column {
+                            Text(
+                                text = post.username ?: "Unknown",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (post.content.isNotBlank()) {
+                                Text(
+                                    text = post.content,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 13.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Column(modifier = modifier) {
+        // HIDDEN POST: Show placeholder if user selected HIDE mode for NSFW content
+        if (shouldHidePost) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(4f / 5f)
+                    .clip(RoundedCornerShape(32.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF1A1A2E),
+                                Color(0xFF16162A),
+                                Color(0xFF1A1A2E)
+                            )
+                        )
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(32.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Warning Icon with glow
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFFF97316).copy(alpha = 0.2f),
+                                        Color.Transparent
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.VisibilityOff,
+                            contentDescription = "Hidden Content",
+                            tint = Color(0xFFF97316),
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    
+                    Text(
+                        text = "Sensitive Content",
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "This post is hidden because it contains\n18+ adult content",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    // NO reveal button - content is completely hidden
+                }
+            }
+        } else {
         // Image Container
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(3f / 4f)
+                .aspectRatio(4f / 5f) // Instagram-style 4:5 ratio - content fills better
                 .scale(animatedScale)
                 .clip(RoundedCornerShape(32.dp))
                 .background(CardBg)
                 .border(1.dp, BorderWhite10, RoundedCornerShape(32.dp))
+                // NOTE: Blur is now applied ONLY to the thumbnail inside the overlay, not here
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onDoubleTap = { handleDoubleTap() }
+                        onDoubleTap = { handleDoubleTap() },
+                        onLongPress = { 
+                            // Check if it's a video - navigate to Shorts, otherwise fullscreen for images
+                            val mediaUrl = post.mediaUrl ?: post.mediaUrls.firstOrNull()
+                            val isVideoPost = mediaUrl?.let { url ->
+                                url.endsWith(".mp4", ignoreCase = true) ||
+                                url.endsWith(".webm", ignoreCase = true) ||
+                                url.endsWith(".mov", ignoreCase = true) ||
+                                post.mediaType == "video"
+                            } ?: false
+                            
+                            if (isVideoPost) {
+                                onNavigateToShorts() // Go to Shorts for videos
+                            } else {
+                                isFullscreen = true // Fullscreen gallery for images
+                            }
+                        }
                     )
                 }
         ) {
@@ -175,82 +480,207 @@ fun PremiumPostCard(
                 var currentPage by remember { mutableIntStateOf(0) }
                 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // Media display with swipe support
-                    androidx.compose.foundation.pager.HorizontalPager(
-                        state = androidx.compose.foundation.pager.rememberPagerState { allMediaUrls.size }.also { 
-                            currentPage = it.currentPage 
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    ) { page ->
+                    // CRITICAL: Only render actual media when NOT blurred
+                    // When shouldBlurPost is true, we skip rendering actual content entirely
+                    if (!shouldBlurPost) {
+                        // Media display with swipe support - ONLY when not blurred
+                        androidx.compose.foundation.pager.HorizontalPager(
+                            state = androidx.compose.foundation.pager.rememberPagerState { allMediaUrls.size }.also { 
+                                currentPage = it.currentPage 
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        ) { page ->
                         val mediaUrl = allMediaUrls[page]
+                        
+                        // Better video detection - check multiple formats
                         val isVideo = mediaUrl.endsWith(".mp4", ignoreCase = true) || 
                                        mediaUrl.endsWith(".webm", ignoreCase = true) ||
+                                       mediaUrl.endsWith(".mov", ignoreCase = true) ||
+                                       mediaUrl.endsWith(".avi", ignoreCase = true) ||
+                                       mediaUrl.endsWith(".mkv", ignoreCase = true) ||
+                                       mediaUrl.contains("/video/", ignoreCase = true) ||
                                        post.mediaType == "video"
                         
+                        android.util.Log.d("PremiumPostCard", "Media URL: $mediaUrl, isVideo: $isVideo, mediaType: ${post.mediaType}")
+                        
                         if (isVideo) {
-                            // Video Player with ExoPlayer + Loading indicator
-                            var isBuffering by remember { mutableStateOf(true) }
+                            // Video Player with pooled ExoPlayer (no re-buffering on scroll!)
+                            // Start with FALSE - assume player is ready (for pooled players)
+                            var isBuffering by remember { mutableStateOf(false) }
+                            var hasError by remember { mutableStateOf(false) }
+                            // Use global mute state from FeedPlayerManager (persists across scroll)
+                            var isMutedState by remember { mutableStateOf(FeedPlayerManager.isMuted) }
                             
+                            // Initialize player manager with context
+                            FeedPlayerManager.init(context)
+                            
+                            @androidx.annotation.OptIn(UnstableApi::class)
                             val exoPlayer = remember(mediaUrl) {
-                                ExoPlayer.Builder(context).build().apply {
-                                    setMediaItem(MediaItem.fromUri(Uri.parse(mediaUrl)))
-                                    repeatMode = Player.REPEAT_MODE_ONE
-                                    volume = 0f // Muted by default
-                                    addListener(object : Player.Listener {
-                                        override fun onPlaybackStateChanged(state: Int) {
-                                            isBuffering = state == Player.STATE_BUFFERING
-                                        }
-                                    })
-                                    prepare()
-                                    playWhenReady = true
+                                FeedPlayerManager.getPlayer(
+                                    url = mediaUrl,
+                                    onBufferingChange = { buffering -> isBuffering = buffering },
+                                    onError = { hasError = true }
+                                )
+                            }
+                            
+                            // Continuously poll player state to update buffering status
+                            // This ensures we catch when player starts playing
+                            // Only poll when visible (not off-screen) - major performance optimization
+                            LaunchedEffect(exoPlayer, isVisible) {
+                                if (!isVisible) return@LaunchedEffect // Skip polling for off-screen videos
+                                
+                                exoPlayer?.let { player ->
+                                    while (isVisible) {
+                                        // Update buffering based on actual player state
+                                        val shouldBuffer = player.playbackState == Player.STATE_BUFFERING
+                                        val isPlaying = player.isPlaying
+                                        
+                                        // Only show loading if truly buffering AND not playing
+                                        isBuffering = shouldBuffer && !isPlaying
+                                        
+                                        // Sync with global mute state
+                                        isMutedState = FeedPlayerManager.isMuted
+                                        player.volume = if (FeedPlayerManager.isMuted) 0f else 1f
+                                        
+                                        delay(500) // Reduced from 100ms to 500ms for smoother scrolling
+                                    }
                                 }
                             }
                             
+                            // Pause when scrolled away, DON'T release (keeps it cached)
                             DisposableEffect(mediaUrl) {
                                 onDispose {
-                                    exoPlayer.release()
+                                    // Just pause - FeedPlayerManager keeps player cached
+                                    FeedPlayerManager.pausePlayer(mediaUrl)
+                                }
+                            }
+                            
+                            // Play/pause based on visibility AND NSFW status (like Instagram)
+                            // CRITICAL: Stop video when content should be hidden/blurred for NSFW
+                            LaunchedEffect(isVisible, exoPlayer, shouldBlurPost, shouldHidePost) {
+                                exoPlayer?.let { player ->
+                                    // Only play if visible AND not blocked by NSFW overlay
+                                    val canPlay = isVisible && !shouldBlurPost && !shouldHidePost
+                                    if (canPlay) {
+                                        player.playWhenReady = true
+                                    } else {
+                                        player.playWhenReady = false
+                                    }
                                 }
                             }
                             
                             Box(modifier = Modifier.fillMaxSize()) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        PlayerView(ctx).apply {
-                                            player = exoPlayer
-                                            useController = false
-                                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                            layoutParams = FrameLayout.LayoutParams(
-                                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                                ViewGroup.LayoutParams.MATCH_PARENT
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                if (!hasError && exoPlayer != null) {
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            PlayerView(ctx).apply {
+                                                player = exoPlayer
+                                                useController = false
+                                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                                layoutParams = FrameLayout.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                                 
-                                // Show loading shimmer while buffering
-                                if (isBuffering) {
+                                // Show loading indicator only when truly buffering
+                                if (isBuffering && !hasError) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .background(CardBg),
+                                            .background(Color.Black.copy(alpha = 0.7f)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        ShimmerEffect(modifier = Modifier.fillMaxSize())
-                                        CircularProgressIndicator(
-                                            color = CyanGlow,
-                                            strokeWidth = 3.dp,
-                                            modifier = Modifier.size(48.dp)
-                                        )
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            CircularProgressIndicator(
+                                                color = CyanGlow,
+                                                strokeWidth = 4.dp,
+                                                modifier = Modifier.size(56.dp)
+                                            )
+                                            Spacer(Modifier.height(12.dp))
+                                            Text(
+                                                text = "Loading...",
+                                                color = Color.White.copy(alpha = 0.8f),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
                                     }
+                                }
+                                
+                                // Show error state
+                                if (hasError) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color(0xFF1A1A2E)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(
+                                                imageVector = Icons.Filled.VideocamOff,
+                                                contentDescription = "Video error",
+                                                tint = Color.White.copy(alpha = 0.5f),
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                "Video unavailable",
+                                                color = Color.White.copy(alpha = 0.5f),
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                // Mute/Unmute button - bottom right corner
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(12.dp)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                        .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                                        .clickable { 
+                                            // Use global mute toggle - persists across all videos
+                                            FeedPlayerManager.toggleMute()
+                                            isMutedState = FeedPlayerManager.isMuted
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isMutedState) 
+                                            Icons.Filled.VolumeOff 
+                                        else 
+                                            Icons.Filled.VolumeUp,
+                                        contentDescription = if (isMutedState) "Unmute" else "Mute",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                             }
                         } else {
                             // Optimized Image display with shimmer loading
+                            // Add logging for debugging
+                            android.util.Log.d("PremiumPostCard", "Loading image: $mediaUrl")
+                            
                             SubcomposeAsyncImage(
                                 model = ImageRequest.Builder(context)
                                     .data(mediaUrl)
                                     .crossfade(300)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .placeholder(ColorDrawable(android.graphics.Color.parseColor("#1A1A2E")))
+                                    .error(ColorDrawable(android.graphics.Color.parseColor("#1A1A2E")))
                                     .build(),
                                 contentDescription = "Post media ${page + 1}",
                                 modifier = Modifier.fillMaxSize(),
@@ -266,18 +696,28 @@ fun PremiumPostCard(
                                     }
                                 },
                                 error = {
+                                    // Show error with URL for debugging
+                                    android.util.Log.e("PremiumPostCard", "Failed to load: $mediaUrl")
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .background(Color(0xFF1A1A2E)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.BrokenImage,
-                                            contentDescription = "Error loading image",
-                                            tint = Color.White.copy(alpha = 0.5f),
-                                            modifier = Modifier.size(48.dp)
-                                        )
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(
+                                                imageVector = Icons.Filled.BrokenImage,
+                                                contentDescription = "Error loading image",
+                                                tint = Color.White.copy(alpha = 0.5f),
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                "Tap to retry",
+                                                color = Color.White.copy(alpha = 0.5f),
+                                                fontSize = 12.sp
+                                            )
+                                        }
                                     }
                                 }
                             )
@@ -327,7 +767,8 @@ fun PremiumPostCard(
                             )
                         }
                     }
-                }
+                    } // end if (!shouldBlurPost)
+                } // end Box(modifier = Modifier.fillMaxSize())
             } else {
                 // No media - show placeholder/content background
                 Box(
@@ -377,7 +818,93 @@ fun PremiumPostCard(
                     .align(Alignment.TopCenter)
                     .padding(16.dp)
             )
+            // NSFW Blur overlay - clean design with gradient background
+            if (shouldBlurPost) {
+                val thumbnailUrl = post.mediaUrl ?: post.mediaUrls.firstOrNull()
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { showNSFWContent = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Layer 1: Blurred/gradient background
+                    if (thumbnailUrl != null) {
+                        // Try to show blurred thumbnail
+                        AsyncImage(
+                            model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                .data(thumbnailUrl)
+                                .size(60, 75) // Small size for blur effect
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .blur(30.dp),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    
+                    // Layer 2: Dark gradient overlay (always visible)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color(0xFF1A1A2E).copy(alpha = 0.9f),
+                                        Color(0xFF16162A),
+                                        Color(0xFF1A1A2E).copy(alpha = 0.9f)
+                                    )
+                                )
+                            )
+                    )
+                    
+                    // Layer 3: Centered 18+ Content text ONLY (no header/menu)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Warning Icon with glow effect
+                        Box(
+                            modifier = Modifier
+                                .size(80.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.radialGradient(
+                                        colors = listOf(
+                                            Color(0xFF6366F1).copy(alpha = 0.3f),
+                                            Color.Transparent
+                                        )
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.VisibilityOff,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(44.dp)
+                            )
+                        }
+                        
+                        Text(
+                            text = "Sensitive Content",
+                            color = Color.White,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Click to See",
+                            color = Color(0xFF6366F1),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
         }
+        } // End else block for shouldHidePost
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -527,6 +1054,8 @@ private fun UserInfoBar(
 
         // More Button with Animated Popup Menu
         var showMenu by remember { mutableStateOf(false) }
+        var showReportDialog by remember { mutableStateOf(false) }
+        var showBlockDialog by remember { mutableStateOf(false) }
         val menuScale by animateFloatAsState(
             targetValue = if (showMenu) 1f else 0.8f,
             animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
@@ -568,36 +1097,48 @@ private fun UserInfoBar(
                 )
             }
             
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false },
-                modifier = Modifier
-                    .scale(menuScale)
-                    .widthIn(min = 260.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xFF0D0D1A)) // Solid dark base
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color(0xFF1F1F3D).copy(alpha = 0.9f),
-                                Color(0xFF12122A).copy(alpha = 0.95f),
-                                Color(0xFF0A0A15)
-                            )
-                        )
-                    )
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color(0xFF6366F1).copy(alpha = 0.5f),
-                                Color(0xFFEC4899).copy(alpha = 0.3f),
-                                Color(0xFF8B5CF6).copy(alpha = 0.4f)
-                            )
-                        ),
-                        shape = RoundedCornerShape(24.dp)
-                    )
-                    .padding(vertical = 16.dp, horizontal = 8.dp)
+            MaterialTheme(
+                colorScheme = MaterialTheme.colorScheme.copy(
+                    surface = Color.Transparent,
+                    surfaceContainer = Color(0xFF0A0A12)
+                ),
+                shapes = MaterialTheme.shapes.copy(
+                    extraSmall = RoundedCornerShape(16.dp)
+                )
             ) {
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier
+                        .scale(menuScale)
+                        .widthIn(min = 200.dp, max = 240.dp)
+                        .background(
+                            color = Color(0xFF0A0A12),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color(0xFF1A1A35),
+                                    Color(0xFF121225),
+                                    Color(0xFF0A0A12)
+                                )
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF6366F1).copy(alpha = 0.4f),
+                                    Color(0xFFEC4899).copy(alpha = 0.25f),
+                                    Color(0xFF8B5CF6).copy(alpha = 0.35f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .padding(vertical = 6.dp, horizontal = 4.dp)
+                ) {
                 if (isOwner) {
                     // Owner options - Edit and Delete with hover effect
                     DropdownMenuItem(
@@ -693,24 +1234,21 @@ private fun UserInfoBar(
                         }
                     )
                 } else {
-                    // Non-owner options - Report with premium styling
+                    // Non-owner options - Report compact
                     DropdownMenuItem(
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp, horizontal = 8.dp)
+                                modifier = Modifier.padding(vertical = 4.dp)
                             ) {
-                                // Icon with gradient background
                                 Box(
                                     modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(
-                                            Brush.linearGradient(
+                                            Brush.radialGradient(
                                                 colors = listOf(
-                                                    Color(0xFFFBBF24).copy(alpha = 0.25f),
+                                                    Color(0xFFFBBF24).copy(alpha = 0.3f),
                                                     Color(0xFFF59E0B).copy(alpha = 0.15f)
                                                 )
                                             )
@@ -721,35 +1259,28 @@ private fun UserInfoBar(
                                         imageVector = Icons.Outlined.Flag,
                                         contentDescription = null,
                                         tint = Color(0xFFFCD34D),
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Spacer(Modifier.width(16.dp))
-                                Column(modifier = Modifier.weight(1f)) {
+                                Spacer(Modifier.width(12.dp))
+                                Column {
                                     Text(
                                         "Report Post",
                                         color = Color.White,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 16.sp
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 14.sp
                                     )
-                                    Spacer(Modifier.height(2.dp))
                                     Text(
-                                        "Report inappropriate content",
-                                        color = Color.White.copy(alpha = 0.5f),
-                                        fontSize = 12.sp
+                                        "Flag content",
+                                        color = Color.White.copy(alpha = 0.45f),
+                                        fontSize = 11.sp
                                     )
                                 }
-                                Icon(
-                                    imageVector = Icons.Filled.ChevronRight,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.3f),
-                                    modifier = Modifier.size(20.dp)
-                                )
                             }
                         },
                         onClick = {
                             showMenu = false
-                            onReport()
+                            showReportDialog = true
                         }
                     )
                     
@@ -770,24 +1301,21 @@ private fun UserInfoBar(
                             )
                     )
                     
-                    // Block User with premium styling
+                    // Block User - compact
                     DropdownMenuItem(
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp, horizontal = 8.dp)
+                                modifier = Modifier.padding(vertical = 4.dp)
                             ) {
-                                // Icon with gradient background
                                 Box(
                                     modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(
-                                            Brush.linearGradient(
+                                            Brush.radialGradient(
                                                 colors = listOf(
-                                                    Color(0xFFEF4444).copy(alpha = 0.25f),
+                                                    Color(0xFFEF4444).copy(alpha = 0.3f),
                                                     Color(0xFFDC2626).copy(alpha = 0.15f)
                                                 )
                                             )
@@ -798,39 +1326,139 @@ private fun UserInfoBar(
                                         imageVector = Icons.Outlined.Block,
                                         contentDescription = null,
                                         tint = Color(0xFFF87171),
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Spacer(Modifier.width(16.dp))
-                                Column(modifier = Modifier.weight(1f)) {
+                                Spacer(Modifier.width(12.dp))
+                                Column {
                                     Text(
                                         "Block User",
                                         color = Color(0xFFF87171),
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 16.sp
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 14.sp
                                     )
-                                    Spacer(Modifier.height(2.dp))
                                     Text(
-                                        "Hide all their content",
-                                        color = Color(0xFFEF4444).copy(alpha = 0.5f),
-                                        fontSize = 12.sp
+                                        "Hide content",
+                                        color = Color(0xFFEF4444).copy(alpha = 0.45f),
+                                        fontSize = 11.sp
                                     )
                                 }
-                                Icon(
-                                    imageVector = Icons.Filled.ChevronRight,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.3f),
-                                    modifier = Modifier.size(20.dp)
-                                )
                             }
                         },
                         onClick = {
                             showMenu = false
-                            onBlock()
+                            showBlockDialog = true
                         }
                     )
                 }
             }
+            } // Close MaterialTheme
+        }
+        
+        // Report Confirmation Dialog
+        if (showReportDialog) {
+            AlertDialog(
+                onDismissRequest = { showReportDialog = false },
+                containerColor = Color(0xFF1A1A2E),
+                titleContentColor = Color.White,
+                textContentColor = Color.White.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(20.dp),
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFFBBF24).copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Outlined.Flag,
+                                contentDescription = null,
+                                tint = Color(0xFFFCD34D),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text("Report Post", fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Text("Are you sure you want to report this post? Our team will review it for any violations.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showReportDialog = false
+                            onReport()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFBBF24)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Report", color = Color.Black, fontWeight = FontWeight.SemiBold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showReportDialog = false }) {
+                        Text("Cancel", color = Color.White.copy(alpha = 0.7f))
+                    }
+                }
+            )
+        }
+        
+        // Block Confirmation Dialog
+        if (showBlockDialog) {
+            AlertDialog(
+                onDismissRequest = { showBlockDialog = false },
+                containerColor = Color(0xFF1A1A2E),
+                titleContentColor = Color.White,
+                textContentColor = Color.White.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(20.dp),
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFEF4444).copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Outlined.Block,
+                                contentDescription = null,
+                                tint = Color(0xFFF87171),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text("Block User", fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Text("Are you sure you want to block this user? You won't see their posts or messages anymore.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showBlockDialog = false
+                            onBlock()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFEF4444)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Block", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBlockDialog = false }) {
+                        Text("Cancel", color = Color.White.copy(alpha = 0.7f))
+                    }
+                }
+            )
         }
     }
 }

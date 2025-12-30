@@ -2,6 +2,8 @@ package com.orignal.buddylynk.data.auth
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.orignal.buddylynk.data.api.ApiService
 import com.orignal.buddylynk.data.model.User
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,11 +12,12 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Authentication Manager - Handles login state and session persistence
- * Now integrates with secure backend API (no direct AWS access!)
+ * SECURITY: Uses EncryptedSharedPreferences for JWT token storage
  */
 object AuthManager {
     
     private const val PREFS_NAME = "buddylynk_auth"
+    private const val SECURE_PREFS_NAME = "buddylynk_secure_auth"
     private const val KEY_USER_ID = "user_id"
     private const val KEY_USERNAME = "username"
     private const val KEY_EMAIL = "email"
@@ -25,6 +28,7 @@ object AuthManager {
     private const val KEY_JWT_TOKEN = "jwt_token"
     
     private var prefs: SharedPreferences? = null
+    private var securePrefs: SharedPreferences? = null  // For sensitive data like JWT
     
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
@@ -37,6 +41,25 @@ object AuthManager {
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        
+        // SECURITY: Use EncryptedSharedPreferences for JWT token
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            
+            securePrefs = EncryptedSharedPreferences.create(
+                context,
+                SECURE_PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            // Fallback to regular prefs if encryption fails (older devices)
+            securePrefs = context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+        }
+        
         loadSavedSession()
     }
     
@@ -53,7 +76,7 @@ object AuthManager {
                 val avatar = p.getString(KEY_AVATAR, null)
                 val banner = p.getString(KEY_BANNER, null)
                 val bio = p.getString(KEY_BIO, null)
-                val jwtToken = p.getString(KEY_JWT_TOKEN, null)
+                val jwtToken = securePrefs?.getString(KEY_JWT_TOKEN, null)
                 
                 if (userId != null && username != null && email != null) {
                     _currentUser.value = User(
@@ -85,14 +108,17 @@ object AuthManager {
             putString(KEY_AVATAR, user.avatar)
             putString(KEY_BANNER, user.banner)
             putString(KEY_BIO, user.bio)
-            jwtToken?.let { putString(KEY_JWT_TOKEN, it) }
             apply()
         }
+        
+        // SECURITY: Store JWT token in encrypted storage
+        jwtToken?.let { token ->
+            securePrefs?.edit()?.putString(KEY_JWT_TOKEN, token)?.apply()
+            ApiService.setAuthToken(token)
+        }
+        
         _currentUser.value = user
         _isLoggedIn.value = true
-        
-        // Set JWT token in ApiService
-        jwtToken?.let { ApiService.setAuthToken(it) }
     }
     
     /**
@@ -100,6 +126,7 @@ object AuthManager {
      */
     fun logout() {
         prefs?.edit()?.clear()?.apply()
+        securePrefs?.edit()?.clear()?.apply()  // Clear encrypted JWT token
         _currentUser.value = null
         _isLoggedIn.value = false
         ApiService.setAuthToken(null)

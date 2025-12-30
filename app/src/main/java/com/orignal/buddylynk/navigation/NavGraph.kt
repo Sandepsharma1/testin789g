@@ -208,6 +208,9 @@ fun BuddyLynkNavHost(
                 },
                 onNavigateToUserProfile = { userId ->
                     navController.navigate(Screen.UserProfile.createRoute(userId))
+                },
+                onNavigateToShorts = {
+                    navController.navigate(Screen.Shorts.route)
                 }
             )
         }

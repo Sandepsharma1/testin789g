@@ -7,6 +7,7 @@ import com.orignal.buddylynk.data.repository.BackendRepository
 import com.orignal.buddylynk.data.moderation.ModerationService
 import com.orignal.buddylynk.data.model.Post
 import com.orignal.buddylynk.data.redis.RedisService
+import com.orignal.buddylynk.data.api.ApiService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,16 @@ class HomeViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
     
+    // Pagination state for infinite scroll
+    private val _hasMorePosts = MutableStateFlow(true)
+    val hasMorePosts: StateFlow<Boolean> = _hasMorePosts.asStateFlow()
+    
+    private val _isLoadingMore = MutableStateFlow(false)
+    val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
+    
+    private var currentPage = 0
+    private val pageSize = 30
+    
     // Trending posts from Redis
     private val _trendingPosts = MutableStateFlow<List<String>>(emptyList())
     val trendingPosts: StateFlow<List<String>> = _trendingPosts.asStateFlow()
@@ -46,9 +57,15 @@ class HomeViewModel : ViewModel() {
     private val _savedPostIds = MutableStateFlow<Set<String>>(emptySet())
     val savedPostIds: StateFlow<Set<String>> = _savedPostIds.asStateFlow()
     
+    // Liked post IDs - persists across app sessions
+    private val _likedPostIds = MutableStateFlow<Set<String>>(emptySet())
+    val likedPostIds: StateFlow<Set<String>> = _likedPostIds.asStateFlow()
+    
     init {
         loadBlockedUsers()
         loadSavedPosts()
+        loadLikedPosts() // Load liked posts to show filled hearts
+        loadNSFWPosts() // Load NSFW flags from admin database
         loadPosts()
         loadTrending()
         startAutoRefresh()
@@ -104,6 +121,10 @@ class HomeViewModel : ViewModel() {
             try {
                 android.util.Log.d("HomeViewModel", "Starting to load posts from BackendRepository...")
                 
+                // Reset pagination on fresh load
+                currentPage = 0
+                _hasMorePosts.value = true
+                
                 // ALWAYS fetch fresh blocked users from API BEFORE loading posts
                 try {
                     val freshBlockedIds = BackendRepository.getBlockedUsers()
@@ -113,9 +134,14 @@ class HomeViewModel : ViewModel() {
                     android.util.Log.e("HomeViewModel", "Failed to load blocked users: ${e.message}")
                 }
                 
-                // Fetch posts via BackendRepository (API or DynamoDB based on USE_API)
-                val fetchedPosts = BackendRepository.getFeedPosts()
-                android.util.Log.d("HomeViewModel", "Fetched: ${fetchedPosts.size} posts via BackendRepository")
+                // Fetch posts via BackendRepository with pagination
+                val feedResult = BackendRepository.getFeedPosts(page = 0, limit = pageSize)
+                android.util.Log.e("FEED_DEBUG", "======= FEED LOADED =======")
+                android.util.Log.e("FEED_DEBUG", "Posts: ${feedResult.posts.size}, hasMore: ${feedResult.hasMore}, total: ${feedResult.totalPosts}")
+                android.util.Log.e("FEED_DEBUG", "============================")
+                
+                _hasMorePosts.value = feedResult.hasMore
+                val fetchedPosts = feedResult.posts
                 
                 if (fetchedPosts.isEmpty()) {
                     android.util.Log.d("HomeViewModel", "No posts found.")
@@ -141,20 +167,34 @@ class HomeViewModel : ViewModel() {
                     val sortedPosts = boostedPosts.sortedByDescending { it.createdAt } + 
                                      otherPosts.sortedByDescending { it.createdAt }
                     
+                    // Apply liked AND saved state before showing (persists glow after app close)
+                    val likedSet = _likedPostIds.value
+                    val savedSet = _savedPostIds.value
+                    val postsWithState = sortedPosts.map { post ->
+                        post.copy(
+                            isLiked = likedSet.contains(post.postId),
+                            isBookmarked = savedSet.contains(post.postId)
+                        )
+                    }
+                    
                     // Show posts IMMEDIATELY - no waiting for Redis
-                    _posts.value = sortedPosts
+                    _posts.value = postsWithState
                     _isLoading.value = false
                     
                     // Enhance with Redis views in BACKGROUND (non-blocking)
                     launch {
                         try {
-                            val enhancedPosts = sortedPosts.map { post ->
+                            val enhancedPosts = postsWithState.map { post ->
                                 val redisViews = RedisService.getViews(post.postId)
                                 post.copy(viewsCount = maxOf(post.viewsCount, redisViews.toInt()))
                             }
-                            _posts.value = enhancedPosts
+                            // Apply NSFW flags after all enhancements
+                            val nsfwEnhancedPosts = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(enhancedPosts)
+                            _posts.value = nsfwEnhancedPosts
+                            android.util.Log.d("HomeViewModel", "Applied NSFW flags to ${nsfwEnhancedPosts.count { it.isNSFW }} posts")
                         } catch (e: Exception) {
-                            // Redis enhancement failed, keep original posts
+                            // Redis enhancement failed, keep original posts but still apply NSFW flags
+                            _posts.value = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(_posts.value)
                             android.util.Log.w("HomeViewModel", "Redis enhancement failed: ${e.message}")
                         }
                     }
@@ -165,6 +205,54 @@ class HomeViewModel : ViewModel() {
                 _error.value = e.message ?: "Unknown error"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+    
+    /**
+     * Load more posts for infinite scroll - called when user reaches bottom of feed
+     */
+    fun loadMorePosts() {
+        if (_isLoadingMore.value || !_hasMorePosts.value) return
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingMore.value = true
+            try {
+                currentPage++
+                android.util.Log.d("HomeViewModel", "Loading more posts - page: $currentPage")
+                
+                val feedResult = BackendRepository.getFeedPosts(page = currentPage, limit = pageSize)
+                android.util.Log.d("HomeViewModel", "Loaded ${feedResult.posts.size} more posts, hasMore: ${feedResult.hasMore}")
+                
+                _hasMorePosts.value = feedResult.hasMore
+                
+                if (feedResult.posts.isNotEmpty()) {
+                    // Filter blocked users and append to existing posts
+                    val blockedSet = _blockedUsers.value
+                    val filteredPosts = feedResult.posts.filter { post -> post.userId !in blockedSet }
+                    
+                    // Apply liked and saved state
+                    val likedSet = _likedPostIds.value
+                    val savedSet = _savedPostIds.value
+                    val postsWithState = filteredPosts.map { post ->
+                        post.copy(
+                            isLiked = likedSet.contains(post.postId),
+                            isBookmarked = savedSet.contains(post.postId)
+                        )
+                    }
+                    
+                    // Append to existing posts (avoid duplicates)
+                    val existingIds = _posts.value.map { it.postId }.toSet()
+                    val newPosts = postsWithState.filter { it.postId !in existingIds }
+                    
+                    _posts.value = _posts.value + newPosts
+                    android.util.Log.d("HomeViewModel", "Total posts now: ${_posts.value.size}")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "Error loading more posts", e)
+                currentPage-- // Revert page on error
+            } finally {
+                _isLoadingMore.value = false
             }
         }
     }
@@ -218,6 +306,7 @@ class HomeViewModel : ViewModel() {
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
+            _error.value = null
             try {
                 // Fetch fresh blocked users
                 val freshBlockedIds = BackendRepository.getBlockedUsers()
@@ -236,9 +325,15 @@ class HomeViewModel : ViewModel() {
                 }
                 
                 _posts.value = enhancedPosts
+                _error.value = null // Clear error on success
                 loadTrending()
             } catch (e: Exception) {
-                _error.value = e.message
+                android.util.Log.e("HomeViewModel", "Refresh failed: ${e.message}")
+                _error.value = e.message ?: "Server connection failed"
+                // Clear posts if this is initial load (no posts yet)
+                if (_posts.value.isEmpty()) {
+                    _error.value = "Server is not responding"
+                }
             } finally {
                 _isRefreshing.value = false
             }
@@ -278,8 +373,13 @@ class HomeViewModel : ViewModel() {
                             post.copy(viewsCount = maxOf(post.viewsCount, redisViews.toInt()))
                         }
                         _posts.value = enhancedPosts
+                        _error.value = null // Clear error on successful auto-refresh
                     } catch (e: Exception) {
-                        // Silent fail on auto-refresh
+                        android.util.Log.w("HomeViewModel", "Auto-refresh failed: ${e.message}")
+                        // Set error if posts are empty (server was never reachable)
+                        if (_posts.value.isEmpty()) {
+                            _error.value = "Server is not responding"
+                        }
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -304,6 +404,15 @@ class HomeViewModel : ViewModel() {
             } else post
         }
         
+        // Also update the likedPostIds set for persistence
+        if (newIsLiked) {
+            _likedPostIds.value = _likedPostIds.value + postId
+            com.orignal.buddylynk.data.settings.LikedPostsManager.likePost(postId)
+        } else {
+            _likedPostIds.value = _likedPostIds.value - postId
+            com.orignal.buddylynk.data.settings.LikedPostsManager.unlikePost(postId)
+        }
+        
         // Update Redis + DynamoDB in background
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -315,6 +424,15 @@ class HomeViewModel : ViewModel() {
                 }
                 // Save to API permanently (via BackendRepository)
                 BackendRepository.likePost(postId)
+                
+                // Track for MindFlow Algorithm
+                val contentOwnerId = currentPost.userId ?: ""
+                val isNSFW = currentPost.isNSFW
+                if (newIsLiked) {
+                    com.orignal.buddylynk.data.api.BehaviorTracker.trackLike(currentUserId, postId, contentOwnerId, isNSFW)
+                } else {
+                    com.orignal.buddylynk.data.api.BehaviorTracker.trackUnlike(currentUserId, postId, contentOwnerId, isNSFW)
+                }
             } catch (e: Exception) {
                 android.util.Log.e("HomeViewModel", "Error updating likes: ${e.message}")
             }
@@ -334,6 +452,89 @@ class HomeViewModel : ViewModel() {
             } catch (e: Exception) {
                 android.util.Log.e("HomeViewModel", "Error loading saved posts: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * Load liked posts - tries API first, then merges with local storage
+     * This ensures likes persist both across reinstalls (API) and when offline (local)
+     */
+    private fun loadLikedPosts() {
+        if (currentUserId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Start with local storage (always available, works offline)
+                val localLikedIds = com.orignal.buddylynk.data.settings.LikedPostsManager.getLikedPostIds()
+                
+                // Also try to load from API (for cross-device sync)
+                val apiLikedIds = try {
+                    BackendRepository.getLikedPostIds().toSet()
+                } catch (e: Exception) {
+                    android.util.Log.w("HomeViewModel", "API liked posts failed, using local only: ${e.message}")
+                    emptySet()
+                }
+                
+                // Merge both - union of local and API
+                val mergedLikedIds = localLikedIds + apiLikedIds
+                _likedPostIds.value = mergedLikedIds
+                
+                // Sync any new likes from API back to local storage
+                apiLikedIds.forEach { postId ->
+                    if (postId !in localLikedIds) {
+                        com.orignal.buddylynk.data.settings.LikedPostsManager.likePost(postId)
+                    }
+                }
+                
+                android.util.Log.d("HomeViewModel", "Loaded liked posts: ${localLikedIds.size} local + ${apiLikedIds.size} API = ${mergedLikedIds.size} total")
+                
+                // Update posts with isLiked state
+                if (mergedLikedIds.isNotEmpty() && _posts.value.isNotEmpty()) {
+                    _posts.value = _posts.value.map { post ->
+                        post.copy(isLiked = mergedLikedIds.contains(post.postId))
+                    }
+                    android.util.Log.d("HomeViewModel", "Applied isLiked state to posts")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "Error loading liked posts: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Load NSFW posts from admin database - shows blur/hide based on user settings
+     * Connects to DynamoDB NSFW table in real-time
+     */
+    private fun loadNSFWPosts() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Fetch NSFW flags from server
+                val result = com.orignal.buddylynk.data.api.NSFWApiService.fetchNSFWPosts()
+                result.onSuccess { nsfwIds ->
+                    android.util.Log.d("HomeViewModel", "Loaded ${nsfwIds.size} NSFW posts from admin database")
+                    
+                    // Apply NSFW flags to existing posts
+                    if (nsfwIds.isNotEmpty() && _posts.value.isNotEmpty()) {
+                        _posts.value = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(_posts.value)
+                        android.util.Log.d("HomeViewModel", "Applied NSFW flags to posts")
+                    }
+                }
+                result.onFailure { e ->
+                    android.util.Log.w("HomeViewModel", "NSFW API not available: ${e.message}")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "Error loading NSFW posts: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Refresh NSFW flags (called on pull-to-refresh)
+     */
+    fun refreshNSFWFlags() {
+        viewModelScope.launch(Dispatchers.IO) {
+            com.orignal.buddylynk.data.api.NSFWApiService.forceRefresh()
+            // Re-apply to posts
+            _posts.value = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(_posts.value)
         }
     }
     
@@ -395,10 +596,13 @@ class HomeViewModel : ViewModel() {
         // Update Redis + DynamoDB in background
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Persist to DynamoDB via API
+                ApiService.sharePost(postId)
+                
+                // Also update Redis cache
                 RedisService.incrementShares(postId)
                 RedisService.incrementPostScore(postId, 3.0)
-                // Shares tracked via Redis for now (no API endpoint yet)
-                android.util.Log.d("HomeViewModel", "Share count updated to $newCount via Redis")
+                android.util.Log.d("HomeViewModel", "Share count updated to $newCount via API + Redis")
             } catch (e: Exception) {
                 android.util.Log.e("HomeViewModel", "Share update error: ${e.message}")
             }

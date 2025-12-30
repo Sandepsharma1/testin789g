@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.orignal.buddylynk.data.auth.AuthManager
 import com.orignal.buddylynk.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -49,7 +50,29 @@ fun SplashScreen(
     var showTagline by remember { mutableStateOf(false) }
     var showRings by remember { mutableStateOf(false) }
     
+    // Server health check state
+    var isServerOnline by remember { mutableStateOf<Boolean?>(null) } // null = checking
+    var isCheckingServer by remember { mutableStateOf(true) }
+    var animationComplete by remember { mutableStateOf(false) }
+    var showServerDownScreen by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    
+    // Run splash animation AND check server in parallel
     LaunchedEffect(Unit) {
+        // Start server check in background
+        launch {
+            try {
+                val isHealthy = com.orignal.buddylynk.data.network.ServerHealthObserver.checkServerHealth()
+                isServerOnline = isHealthy
+                android.util.Log.d("SplashScreen", "Server health check: $isHealthy")
+            } catch (e: Exception) {
+                isServerOnline = false
+                android.util.Log.e("SplashScreen", "Server health check failed: ${e.message}")
+            }
+            isCheckingServer = false
+        }
+        
+        // Run splash animation
         delay(200)
         showRings = true
         delay(300)
@@ -59,13 +82,60 @@ fun SplashScreen(
         delay(300)
         showTagline = true
         delay(1500)
-        
-        // Navigate based on login status
-        if (AuthManager.isUserLoggedIn()) {
-            onNavigateToHome()
-        } else {
-            onNavigateToLogin()
+        animationComplete = true
+    }
+    
+    // After animation completes, decide what to show
+    LaunchedEffect(animationComplete, isServerOnline) {
+        if (animationComplete && isServerOnline != null) {
+            if (isServerOnline == true) {
+                // Server is online - navigate to home/login
+                if (AuthManager.isUserLoggedIn()) {
+                    onNavigateToHome()
+                } else {
+                    onNavigateToLogin()
+                }
+            } else {
+                // Server is offline - show ServerDownScreen
+                showServerDownScreen = true
+            }
         }
+    }
+    
+    // Show ServerDownScreen if server is offline after animation
+    if (showServerDownScreen) {
+        ServerDownScreen(
+            onRetry = {
+                // Re-check server health
+                isCheckingServer = true
+                showServerDownScreen = false
+                isServerOnline = null
+                
+                // Check again
+                scope.launch {
+                    try {
+                        val isHealthy = com.orignal.buddylynk.data.network.ServerHealthObserver.checkServerHealth()
+                        isServerOnline = isHealthy
+                        if (isHealthy) {
+                            // Server is back - navigate
+                            if (AuthManager.isUserLoggedIn()) {
+                                onNavigateToHome()
+                            } else {
+                                onNavigateToLogin()
+                            }
+                        } else {
+                            showServerDownScreen = true
+                        }
+                    } catch (e: Exception) {
+                        isServerOnline = false
+                        showServerDownScreen = true
+                    }
+                    isCheckingServer = false
+                }
+            },
+            isRetrying = isCheckingServer
+        )
+        return
     }
     
     Box(

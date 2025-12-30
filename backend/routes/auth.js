@@ -105,26 +105,21 @@ router.post('/login', async (req, res) => {
         }));
 
         if (!result.Items || result.Items.length === 0) {
-            console.log(`Login failed: User not found for email ${email}`);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
         const user = result.Items[0];
 
-        // Check if user has a password (might be Google-only user)
         if (!user.password) {
-            console.log(`Login failed: No password set for ${email} (Google account?)`);
             return res.status(401).json({ error: 'This account uses Google Sign-In. Please login with Google.' });
         }
 
         // Verify password with bcrypt
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) {
-            console.log(`Login failed: Invalid password for ${email}`);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
-        console.log(`Login successful for ${email}`);
         const token = generateToken(user.userId);
 
         // Remove password from response
@@ -133,7 +128,6 @@ router.post('/login', async (req, res) => {
         res.json({ user, token });
 
     } catch (err) {
-        console.error('Login error:', err);
         res.status(500).json({ error: 'Login failed' });
     }
 });

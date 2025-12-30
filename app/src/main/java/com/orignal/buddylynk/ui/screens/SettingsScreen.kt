@@ -136,6 +136,111 @@ fun SettingsScreen(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
                 
+                // Sensitive Content setting
+                var showSensitiveDialog by remember { mutableStateOf(false) }
+                val sensitiveMode by com.orignal.buddylynk.data.settings.SensitiveContentManager.contentMode.collectAsState()
+                
+                SettingsItem(
+                    icon = Icons.Outlined.VisibilityOff,
+                    title = "Sensitive Content",
+                    subtitle = when (sensitiveMode) {
+                        com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.SHOW -> "Show all content"
+                        com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR -> "Blur sensitive content"
+                        com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE -> "Hide sensitive content"
+                    },
+                    iconColor = GradientPink,
+                    onClick = { showSensitiveDialog = true }
+                )
+                
+                // Sensitive Content Dialog
+                if (showSensitiveDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showSensitiveDialog = false },
+                        containerColor = Color(0xFF1A1A2E),
+                        title = {
+                            Text(
+                                "Sensitive Content",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        text = {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Show option
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.SHOW) GradientPurple.copy(alpha = 0.2f) else Color.Transparent)
+                                        .clickable {
+                                            com.orignal.buddylynk.data.settings.SensitiveContentManager.setMode(com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.SHOW)
+                                            showSensitiveDialog = false
+                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Visibility, null, tint = GradientMint, modifier = Modifier.size(24.dp))
+                                    Column {
+                                        Text("Show All", color = TextPrimary, fontWeight = FontWeight.Medium)
+                                        Text("Show all content without blur", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                                    }
+                                }
+                                
+                                // Blur option
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR) GradientPurple.copy(alpha = 0.2f) else Color.Transparent)
+                                        .clickable {
+                                            com.orignal.buddylynk.data.settings.SensitiveContentManager.setMode(com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR)
+                                            showSensitiveDialog = false
+                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Outlined.BlurOn, null, tint = GradientPink, modifier = Modifier.size(24.dp))
+                                    Column {
+                                        Text("Blur", color = TextPrimary, fontWeight = FontWeight.Medium)
+                                        Text("Blur sensitive content, tap to reveal", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                                    }
+                                }
+                                
+                                // Hide option
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE) GradientPurple.copy(alpha = 0.2f) else Color.Transparent)
+                                        .clickable {
+                                            com.orignal.buddylynk.data.settings.SensitiveContentManager.setMode(com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE)
+                                            showSensitiveDialog = false
+                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Outlined.VisibilityOff, null, tint = LikeRed, modifier = Modifier.size(24.dp))
+                                    Column {
+                                        Text("Hide", color = TextPrimary, fontWeight = FontWeight.Medium)
+                                        Text("Completely hide sensitive content", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showSensitiveDialog = false }) {
+                                Text("Cancel", color = GradientPurple)
+                            }
+                        }
+                    )
+                }
+                
                 SettingsItem(
                     icon = Icons.Outlined.Palette,
                     title = "Appearance",

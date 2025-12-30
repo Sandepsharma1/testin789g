@@ -69,6 +69,16 @@ fun PremiumChatListScreen(
     
     val unreadCount = conversations.sumOf { it.unread }
     
+    // Keep screen awake while on Chat page
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+    
     Box(
         modifier = Modifier
             .fillMaxSize()

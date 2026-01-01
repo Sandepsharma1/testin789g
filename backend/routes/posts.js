@@ -54,10 +54,10 @@ function convertPostMediaUrls(post) {
     return post;
 }
 
-// Simple in-memory cache for feed
+// Simple in-memory cache for feed - DISABLED for variety (shuffle every request)
 let feedCache = null;
 let feedCacheTime = 0;
-const CACHE_TTL = 5000; // 5 seconds - short TTL for fresh content
+const CACHE_TTL = 0; // 0 = disabled - shuffle on every request for fresh content
 
 // Function to clear feed cache (called when NSFW flags change)
 function clearFeedCache() {

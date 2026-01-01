@@ -177,14 +177,29 @@ class HomeViewModel : ViewModel() {
                         )
                     }
                     
-                    // Show posts IMMEDIATELY - no waiting for Redis
-                    _posts.value = postsWithState
+                    // PROGRESSIVE LOADING: Show posts one by one for smooth animation
+                    // First show first 3 posts immediately for fast first paint
+                    val initialPosts = postsWithState.take(3)
+                    _posts.value = initialPosts
                     _isLoading.value = false
                     
-                    // Enhance with Redis views in BACKGROUND (non-blocking)
+                    // Then progressively add remaining posts with staggered delay
+                    launch {
+                        val remainingPosts = postsWithState.drop(3)
+                        for ((index, post) in remainingPosts.withIndex()) {
+                            kotlinx.coroutines.delay(30L) // 30ms delay between each post
+                            _posts.value = _posts.value + post
+                        }
+                        android.util.Log.d("HomeViewModel", "Progressive loading complete: ${_posts.value.size} posts")
+                    }
+                    
+                    // Enhance with Redis views and NSFW flags in BACKGROUND (non-blocking)
                     launch {
                         try {
-                            val enhancedPosts = postsWithState.map { post ->
+                            // Wait for progressive loading to finish
+                            kotlinx.coroutines.delay(50L * postsWithState.size)
+                            
+                            val enhancedPosts = _posts.value.map { post ->
                                 val redisViews = RedisService.getViews(post.postId)
                                 post.copy(viewsCount = maxOf(post.viewsCount, redisViews.toInt()))
                             }

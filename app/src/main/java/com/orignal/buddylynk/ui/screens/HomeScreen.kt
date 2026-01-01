@@ -363,6 +363,20 @@ fun HomeScreen(
                 // Real posts from AWS - Premium Cards with Action Capsule
                 if (posts.isNotEmpty()) {
                     itemsIndexed(posts, key = { _, post -> post.postId }) { index, post ->
+                        // Animate each post with fade-in + slide-up effect
+                        var isVisible by remember { mutableStateOf(false) }
+                        LaunchedEffect(post.postId) {
+                            isVisible = true
+                        }
+                        
+                        AnimatedVisibility(
+                            visible = isVisible,
+                            enter = fadeIn(animationSpec = tween(300)) + 
+                                   slideInVertically(
+                                       animationSpec = tween(300),
+                                       initialOffsetY = { it / 4 }
+                                   )
+                        ) {
                         PremiumPostCard(
                             post = post,
                             isLiked = post.isLiked,
@@ -417,6 +431,7 @@ fun HomeScreen(
                             onAvatarLongPress = { /* TODO: Show story */ },
                             onNavigateToShorts = onNavigateToShorts
                         )
+                        } // End AnimatedVisibility
                         Spacer(modifier = Modifier.height(40.dp))
                     }
                 } else if (!isLoading && error == null && posts.isEmpty()) {

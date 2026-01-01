@@ -234,30 +234,13 @@ router.get('/feed', async (req, res) => {
             }
         }
 
-        // Apply pagination - slice the sorted posts based on limit and offset
-        const page = parseInt(req.query.page) || 0;
-        const pageSize = Math.min(limit, 50); // Max 50 per page for performance
-        const startIndex = page * pageSize;
-        const endIndex = startIndex + pageSize;
-        const paginatedPosts = sortedPosts.slice(startIndex, endIndex);
-        const hasMore = endIndex < sortedPosts.length;
-        const totalPosts = sortedPosts.length;
-
-        // Cache the full result (short TTL for freshness)
+        // Cache the result (short TTL for freshness)
         feedCache = sortedPosts;
         feedCacheTime = now;
 
-        // Return paginated response with metadata for infinite scroll
-        res.json({
-            posts: paginatedPosts,
-            pagination: {
-                page: page,
-                pageSize: pageSize,
-                hasMore: hasMore,
-                totalPosts: totalPosts,
-                nextPage: hasMore ? page + 1 : null
-            }
-        });
+        // Return all posts - Android app handles progressive display
+        console.log(`[Feed] Returning ${sortedPosts.length} posts`);
+        res.json(sortedPosts);
     } catch (err) {
         console.error('Feed error:', err);
         res.status(500).json({ error: 'Failed to load feed' });

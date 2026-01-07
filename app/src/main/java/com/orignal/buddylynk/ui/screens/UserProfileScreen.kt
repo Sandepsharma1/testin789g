@@ -56,6 +56,9 @@ fun UserProfileScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Gallery", "Mentions", "About")
     
+    // Unfollow confirmation dialog
+    var showUnfollowDialog by remember { mutableStateOf(false) }
+    
     // Load user profile
     LaunchedEffect(userId) {
         viewModel.loadUserProfile(userId)
@@ -76,7 +79,7 @@ fun UserProfileScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF050505))
+            .background(Color(0xFF0A0A0A))
     ) {
         // Dynamic animated background orbs
         UserFuturisticBackground(orbRotation)
@@ -158,7 +161,15 @@ fun UserProfileScreen(
                         UserActionButtonsRow(
                             isFollowing = isFollowing,
                             isFollowLoading = isFollowLoading,
-                            onFollowClick = { viewModel.toggleFollow() },
+                            onFollowClick = { 
+                                if (isFollowing) {
+                                    // Show confirmation dialog for unfollow
+                                    showUnfollowDialog = true
+                                } else {
+                                    // One-tap follow
+                                    viewModel.toggleFollow()
+                                }
+                            },
                             onMessageClick = { onNavigateToChat(profile.user.userId) }
                         ) 
                     }
@@ -221,6 +232,51 @@ fun UserProfileScreen(
                         2 -> item { UserAboutSection(profile.user.bio ?: "") }
                     }
                 }
+            }
+        }
+        
+        // Unfollow Confirmation Dialog
+        if (showUnfollowDialog) {
+            userProfile?.let { profile ->
+                AlertDialog(
+                    onDismissRequest = { showUnfollowDialog = false },
+                    containerColor = Color(0xFF1A1A2E),
+                    titleContentColor = Color.White,
+                    textContentColor = Color.White.copy(alpha = 0.7f),
+                    title = {
+                        Text(
+                            text = "Unfollow @${profile.user.username}?",
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    text = {
+                        Text("You will no longer see posts from @${profile.user.username} in your feed. You can follow them again anytime.")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showUnfollowDialog = false
+                                viewModel.toggleFollow()
+                            }
+                        ) {
+                            Text(
+                                text = "Unfollow",
+                                color = Color(0xFFEF4444),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { showUnfollowDialog = false }
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                color = Color.White
+                            )
+                        }
+                    }
+                )
             }
         }
     }
@@ -426,7 +482,7 @@ private fun UserStoryRingAvatar(
             modifier = Modifier
                 .size(size + 4.dp)
                 .clip(CircleShape)
-                .background(Color(0xFF050505))
+                .background(Color(0xFF0A0A0A))
         )
         
         // Avatar image or default

@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 // Premium Colors
-private val DarkBg = Color(0xFF050505)
+private val DarkBg = Color(0xFF0A0A0A)
 private val CardBg = Color(0xFF1A1A1A)
 private val Zinc800 = Color(0xFF27272A)
 private val Zinc600 = Color(0xFF52525B)

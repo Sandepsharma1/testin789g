@@ -65,6 +65,9 @@ object SmoothApiClient {
     // Auth token
     private var authToken: String? = null
     
+    // Callback for unauthorized responses (JWT expired) - production-ready auto-logout
+    private var onUnauthorizedCallback: (() -> Unit)? = null
+    
     // Server status
     private val _isServerOnline = MutableStateFlow(true)
     val isServerOnline: StateFlow<Boolean> = _isServerOnline.asStateFlow()
@@ -75,6 +78,15 @@ object SmoothApiClient {
     fun setAuthToken(token: String?) {
         authToken = token
         Log.d(TAG, "Auth token ${if (token != null) "set" else "cleared"}")
+    }
+    
+    /**
+     * Set callback for when JWT token expires (401 response)
+     * This should trigger automatic logout
+     */
+    fun setOnUnauthorizedCallback(callback: () -> Unit) {
+        onUnauthorizedCallback = callback
+        Log.d(TAG, "Unauthorized callback set - auto-logout enabled")
     }
     
     // ==================== PUBLIC API ====================
@@ -261,8 +273,10 @@ object SmoothApiClient {
             }
             
             response.code == 401 -> {
-                Log.w(TAG, "Unauthorized: $url")
-                ApiResponse.Error(ApiError.Unauthorized, "Authentication required")
+                Log.w(TAG, "Unauthorized (JWT expired or invalid): $url")
+                // Trigger auto-logout callback - production ready
+                onUnauthorizedCallback?.invoke()
+                ApiResponse.Error(ApiError.Unauthorized, "Session expired. Please login again.")
             }
             
             response.code == 404 -> {

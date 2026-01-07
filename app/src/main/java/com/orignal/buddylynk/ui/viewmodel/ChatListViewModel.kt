@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.orignal.buddylynk.data.auth.AuthManager
 import com.orignal.buddylynk.data.repository.BackendRepository
+import com.orignal.buddylynk.data.state.AppStateManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +12,8 @@ import kotlinx.coroutines.launch
 
 /**
  * ChatListViewModel - Fetches real conversations via Backend API
+ * 
+ * State Persistence: Saves scroll position and selected conversation to restore on app reopen
  */
 class ChatListViewModel : ViewModel() {
     
@@ -34,8 +37,46 @@ class ChatListViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
     
+    // State persistence - track selected conversation
+    private val _selectedConversationId = MutableStateFlow<String?>(null)
+    val selectedConversationId: StateFlow<String?> = _selectedConversationId.asStateFlow()
+    
+    // Scroll position for restoration
+    var savedScrollIndex: Int = 0
+        private set
+    var savedScrollOffset: Int = 0
+        private set
+    
     init {
+        // Restore saved state
+        restoreSavedState()
         loadConversations()
+    }
+    
+    private fun restoreSavedState() {
+        val savedState = AppStateManager.getChatState()
+        _selectedConversationId.value = savedState.selectedConversationId
+        savedScrollIndex = savedState.scrollIndex
+        savedScrollOffset = savedState.scrollOffset
+    }
+    
+    fun selectConversation(conversationId: String?) {
+        _selectedConversationId.value = conversationId
+        saveState()
+    }
+    
+    fun saveScrollPosition(scrollIndex: Int, scrollOffset: Int) {
+        savedScrollIndex = scrollIndex
+        savedScrollOffset = scrollOffset
+        saveState()
+    }
+    
+    private fun saveState() {
+        AppStateManager.saveChatState(
+            scrollIndex = savedScrollIndex,
+            scrollOffset = savedScrollOffset,
+            selectedConversationId = _selectedConversationId.value
+        )
     }
     
     fun loadConversations() {

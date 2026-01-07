@@ -68,7 +68,8 @@ class HomeViewModel : ViewModel() {
         loadNSFWPosts() // Load NSFW flags from admin database
         loadPosts()
         loadTrending()
-        startAutoRefresh()
+        // Auto-refresh disabled - user controls refresh via pull-to-refresh
+        // startAutoRefresh()
     }
     
     /**
@@ -119,55 +120,46 @@ class HomeViewModel : ViewModel() {
             _isLoading.value = true
             _error.value = null
             try {
-                android.util.Log.d("HomeViewModel", "Starting to load posts from BackendRepository...")
+                android.util.Log.d("HomeViewModel", "Loading posts...")
                 
                 // Reset pagination on fresh load
                 currentPage = 0
                 _hasMorePosts.value = true
                 
-                // ALWAYS fetch fresh blocked users from API BEFORE loading posts
-                try {
-                    val freshBlockedIds = BackendRepository.getBlockedUsers()
-                    _blockedUsers.value = freshBlockedIds.toSet()
-                    android.util.Log.d("HomeViewModel", "Loaded ${freshBlockedIds.size} blocked users for filtering")
-                } catch (e: Exception) {
-                    android.util.Log.e("HomeViewModel", "Failed to load blocked users: ${e.message}")
+                // Load blocked users in parallel (non-blocking)
+                launch {
+                    try {
+                        val freshBlockedIds = BackendRepository.getBlockedUsers()
+                        _blockedUsers.value = freshBlockedIds.toSet()
+                    } catch (e: Exception) {
+                        android.util.Log.w("HomeViewModel", "Failed to load blocked users: ${e.message}")
+                    }
                 }
                 
-                // Fetch posts via BackendRepository with pagination
+                // Fetch posts immediately
                 val feedResult = BackendRepository.getFeedPosts(page = 0, limit = pageSize)
-                android.util.Log.e("FEED_DEBUG", "======= FEED LOADED =======")
-                android.util.Log.e("FEED_DEBUG", "Posts: ${feedResult.posts.size}, hasMore: ${feedResult.hasMore}, total: ${feedResult.totalPosts}")
-                android.util.Log.e("FEED_DEBUG", "============================")
-                
                 _hasMorePosts.value = feedResult.hasMore
                 val fetchedPosts = feedResult.posts
                 
                 if (fetchedPosts.isEmpty()) {
-                    android.util.Log.d("HomeViewModel", "No posts found.")
                     _posts.value = emptyList()
                 } else {
-                    // Filter out blocked users using fresh list
+                    // Quick filter with cached blocked users (don't wait for fresh)
                     val blockedSet = _blockedUsers.value
-                    val filteredPosts = fetchedPosts.filter { post -> 
-                        post.userId !in blockedSet 
-                    }
-                    android.util.Log.d("HomeViewModel", "Filtered ${fetchedPosts.size} -> ${filteredPosts.size} posts (blocked ${blockedSet.size} users)")
+                    val filteredPosts = fetchedPosts.filter { post -> post.userId !in blockedSet }
                     
                     // Priority boost: User's posts from last 20 minutes appear at TOP
                     val now = System.currentTimeMillis()
-                    val twentyMinutesAgo = now - (20 * 60 * 1000) // 20 minutes in ms
+                    val twentyMinutesAgo = now - (20 * 60 * 1000)
 
                     val (boostedPosts, otherPosts) = filteredPosts.partition { post ->
-                        // Check if post is from current user AND within last 20 minutes
                         post.userId == currentUserId && isWithinTimeWindow(post.createdAt, twentyMinutesAgo)
                     }
                     
-                    // Boosted posts first (sorted by newest), then others (sorted by newest)
                     val sortedPosts = boostedPosts.sortedByDescending { it.createdAt } + 
                                      otherPosts.sortedByDescending { it.createdAt }
                     
-                    // Apply liked AND saved state before showing (persists glow after app close)
+                    // Apply liked AND saved state
                     val likedSet = _likedPostIds.value
                     val savedSet = _savedPostIds.value
                     val postsWithState = sortedPosts.map { post ->
@@ -177,42 +169,10 @@ class HomeViewModel : ViewModel() {
                         )
                     }
                     
-                    // PROGRESSIVE LOADING: Show posts one by one for smooth animation
-                    // First show first 3 posts immediately for fast first paint
-                    val initialPosts = postsWithState.take(3)
-                    _posts.value = initialPosts
+                    // SHOW POSTS IMMEDIATELY - no Redis, no NSFW delay
+                    _posts.value = postsWithState
                     _isLoading.value = false
-                    
-                    // Then progressively add remaining posts with staggered delay
-                    launch {
-                        val remainingPosts = postsWithState.drop(3)
-                        for ((index, post) in remainingPosts.withIndex()) {
-                            kotlinx.coroutines.delay(30L) // 30ms delay between each post
-                            _posts.value = _posts.value + post
-                        }
-                        android.util.Log.d("HomeViewModel", "Progressive loading complete: ${_posts.value.size} posts")
-                    }
-                    
-                    // Enhance with Redis views and NSFW flags in BACKGROUND (non-blocking)
-                    launch {
-                        try {
-                            // Wait for progressive loading to finish
-                            kotlinx.coroutines.delay(50L * postsWithState.size)
-                            
-                            val enhancedPosts = _posts.value.map { post ->
-                                val redisViews = RedisService.getViews(post.postId)
-                                post.copy(viewsCount = maxOf(post.viewsCount, redisViews.toInt()))
-                            }
-                            // Apply NSFW flags after all enhancements
-                            val nsfwEnhancedPosts = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(enhancedPosts)
-                            _posts.value = nsfwEnhancedPosts
-                            android.util.Log.d("HomeViewModel", "Applied NSFW flags to ${nsfwEnhancedPosts.count { it.isNSFW }} posts")
-                        } catch (e: Exception) {
-                            // Redis enhancement failed, keep original posts but still apply NSFW flags
-                            _posts.value = com.orignal.buddylynk.data.api.NSFWApiService.applyNSFWFlags(_posts.value)
-                            android.util.Log.w("HomeViewModel", "Redis enhancement failed: ${e.message}")
-                        }
-                    }
+                    android.util.Log.d("HomeViewModel", "Loaded ${postsWithState.size} posts instantly")
                     return@launch
                 }
             } catch (e: Exception) {
@@ -300,9 +260,9 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                val fetchedPosts = BackendRepository.getFeedPosts()
+                val feedResult = BackendRepository.getFeedPosts()
                 // Sort: user's posts first (by createdAt desc), then others
-                val sortedPosts = fetchedPosts.sortedWith(
+                val sortedPosts = feedResult.posts.sortedWith(
                     compareByDescending<Post> { it.userId == currentUserId }
                         .thenByDescending { it.createdAt }
                 )
@@ -322,26 +282,38 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             _isRefreshing.value = true
             _error.value = null
+            
+            // CLEAR ALL POSTS FIRST - gives fresh feed experience
+            _posts.value = emptyList()
+            currentPage = 0
+            _hasMorePosts.value = true
+            
             try {
                 // Fetch fresh blocked users
                 val freshBlockedIds = BackendRepository.getBlockedUsers()
                 _blockedUsers.value = freshBlockedIds.toSet()
                 
-                val fetchedPosts = BackendRepository.getFeedPosts()
+                val feedResult = BackendRepository.getFeedPosts()
+                val fetchedPosts = feedResult.posts
                 
                 // Filter blocked users
                 val blockedSet = _blockedUsers.value
                 val filteredPosts = fetchedPosts.filter { post -> post.userId !in blockedSet }
                 
-                // Enhance with Redis counters
-                val enhancedPosts = filteredPosts.map { post ->
-                    val redisViews = RedisService.getViews(post.postId)
-                    post.copy(viewsCount = maxOf(post.viewsCount, redisViews.toInt()))
+                // Apply liked AND saved state
+                val likedSet = _likedPostIds.value
+                val savedSet = _savedPostIds.value
+                val postsWithState = filteredPosts.map { post ->
+                    post.copy(
+                        isLiked = likedSet.contains(post.postId),
+                        isBookmarked = savedSet.contains(post.postId)
+                    )
                 }
                 
-                _posts.value = enhancedPosts
+                _posts.value = postsWithState
                 _error.value = null // Clear error on success
                 loadTrending()
+                android.util.Log.d("HomeViewModel", "Refresh complete: ${postsWithState.size} fresh posts loaded")
             } catch (e: Exception) {
                 android.util.Log.e("HomeViewModel", "Refresh failed: ${e.message}")
                 _error.value = e.message ?: "Server connection failed"
@@ -373,11 +345,11 @@ class HomeViewModel : ViewModel() {
                 while (true) {
                     delay(30_000) // 30 seconds
                     try {
-                        // Fetch fresh blocked users
                         val freshBlockedIds = BackendRepository.getBlockedUsers()
                         _blockedUsers.value = freshBlockedIds.toSet()
                         
-                        val fetchedPosts = BackendRepository.getFeedPosts()
+                        val feedResult = BackendRepository.getFeedPosts()
+                        val fetchedPosts = feedResult.posts
                         
                         // Filter blocked users
                         val blockedSet = _blockedUsers.value

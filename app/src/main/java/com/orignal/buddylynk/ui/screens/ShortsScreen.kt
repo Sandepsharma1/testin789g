@@ -191,13 +191,16 @@ fun ShortsScreen(
     }
     
     // Filter posts to only show VIDEOS (not images) for shorts
-    val videoPosts = posts.filter { post ->
-        post.mediaUrl != null && (
-            post.mediaType == "video" ||
-            post.mediaUrl!!.contains(".mp4", ignoreCase = true) ||
-            post.mediaUrl!!.contains(".webm", ignoreCase = true) ||
-            post.mediaUrl!!.contains(".mov", ignoreCase = true)
-        )
+    // Shuffle for variety on each visit (like TikTok)
+    val videoPosts = remember(posts) {
+        posts.filter { post ->
+            post.mediaUrl != null && (
+                post.mediaType == "video" ||
+                post.mediaUrl!!.contains(".mp4", ignoreCase = true) ||
+                post.mediaUrl!!.contains(".webm", ignoreCase = true) ||
+                post.mediaUrl!!.contains(".mov", ignoreCase = true)
+            )
+        }.shuffled() // Randomize order for discovery
     }
     val pagerState = rememberPagerState(pageCount = { if (videoPosts.isEmpty()) 1 else videoPosts.size })
     
@@ -251,7 +254,7 @@ fun ShortsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF050505))
+            .background(Color(0xFF0A0A0A))
     ) {
         // --- Dynamic Ambient Background ---
         DynamicAmbientBackground(
@@ -400,6 +403,13 @@ private fun HolographicShortCard(
     val scope = rememberCoroutineScope()
     var showLikeAnimation by remember { mutableStateOf(false) }
     
+    // NSFW content handling - check admin flags and user settings
+    val sensitiveMode by com.orignal.buddylynk.data.settings.SensitiveContentManager.contentMode.collectAsState()
+    val isNSFWContent = post.isNSFW || post.isSensitive
+    var showNSFWContent by remember(post.postId) { mutableStateOf(false) }
+    val shouldBlurPost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR && !showNSFWContent
+    val shouldHidePost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE && !showNSFWContent
+    
     // Card animation
     val cardScale by animateFloatAsState(
         targetValue = if (isAnimating) 0.9f else 1f,
@@ -452,11 +462,11 @@ private fun HolographicShortCard(
     
     LaunchedEffect(isCurrentPage, isMuted) {
         exoPlayer?.let { player ->
-            if (isCurrentPage) {
+            if (isCurrentPage && !shouldBlurPost && !shouldHidePost) {
                 player.playWhenReady = true
                 player.volume = if (isMuted) 0f else 1f
             } else {
-                // Pause when not current (don't release - manager handles that)
+                // Pause when not current or when blurred (don't release - manager handles that)
                 player.playWhenReady = false
                 player.seekTo(0)
                 player.volume = 0f
@@ -564,6 +574,80 @@ private fun HolographicShortCard(
                 tint = Color.Red,
                 modifier = Modifier.size(120.dp)
             )
+        }
+        
+        // NSFW Blur Overlay for Shorts - fullscreen overlay
+        if (shouldBlurPost || shouldHidePost) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.95f))
+                    .clickable { showNSFWContent = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Warning Icon with glow
+                    Box(
+                        modifier = Modifier
+                            .size(100.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFFEF4444).copy(alpha = 0.3f),
+                                        Color.Transparent
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.VisibilityOff,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(56.dp)
+                        )
+                    }
+                    
+                    Text(
+                        text = "18+ Adult Content",
+                        color = Color.White,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Text(
+                        text = "This video may contain sensitive content",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Show button
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(25.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(IndigoAccent, PurpleAccent)
+                                )
+                            )
+                            .clickable { showNSFWContent = true }
+                            .padding(horizontal = 32.dp, vertical = 12.dp)
+                    ) {
+                        Text(
+                            text = "Tap to View",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
         }
         
         // Right Side HUD (Holographic Strip)

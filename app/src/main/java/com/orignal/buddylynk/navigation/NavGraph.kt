@@ -14,7 +14,14 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,6 +80,11 @@ sealed class Screen(val route: String) {
     
     // Feature screens
     object TeamUp : Screen("teamup")
+    
+    // TeamUp with initial group selected (for invite deep links)
+    object TeamUpWithGroup : Screen("teamup/{groupId}") {
+        fun createRoute(groupId: String) = "teamup/$groupId"
+    }
     object Live : Screen("live")
     object Events : Screen("events")
     object GoLive : Screen("golive")
@@ -83,6 +95,7 @@ sealed class Screen(val route: String) {
     object Shorts : Screen("shorts")
     object Call : Screen("call")
     object CreatePost : Screen("createpost")
+    object QRScanner : Screen("qrscanner")
     
     // Group/Channel creation
     object CreateGroup : Screen("creategroup/{isChannel}") {
@@ -92,6 +105,16 @@ sealed class Screen(val route: String) {
     // Group chat
     object GroupChat : Screen("groupchat/{groupId}") {
         fun createRoute(groupId: String) = "groupchat/$groupId"
+    }
+    
+    // Join group via invite code
+    object JoinGroup : Screen("joingroup/{inviteCode}") {
+        fun createRoute(inviteCode: String) = "joingroup/$inviteCode"
+    }
+    
+    // Post detail screen
+    object PostDetail : Screen("post/{postId}") {
+        fun createRoute(postId: String) = "post/$postId"
     }
 }
 
@@ -428,12 +451,68 @@ fun BuddyLynkNavHost(
         
         // Feature screens
         composable(Screen.TeamUp.route) {
+            // Camera permission for QR Scanner
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val cameraPermissionState = com.orignal.buddylynk.ui.utils.rememberCameraPermissionState { granted ->
+                if (granted) {
+                    android.widget.Toast.makeText(context, "Camera access granted! QR Scanner ready.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(context, "Camera permission needed for QR Scanner", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            
             PremiumTeamUpScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onInnerViewChanged = onTeamInnerViewChanged,
                 onCreateGroup = { isChannel ->
                     navController.navigate(Screen.CreateGroup.createRoute(isChannel))
+                },
+                onScanQR = {
+                    if (cameraPermissionState.hasPermission) {
+                        // Navigate to QR Scanner screen
+                        navController.navigate(Screen.QRScanner.route)
+                    } else {
+                        // Request camera permission
+                        cameraPermissionState.requestPermission()
+                    }
                 }
+            )
+        }
+        
+        // TeamUp with initial group pre-selected (for invite deep links)
+        composable(
+            route = Screen.TeamUpWithGroup.route,
+            arguments = listOf(
+                androidx.navigation.navArgument("groupId") {
+                    type = androidx.navigation.NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            val initialGroupId = backStackEntry.arguments?.getString("groupId")
+            // Camera permission for QR Scanner
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val cameraPermissionState = com.orignal.buddylynk.ui.utils.rememberCameraPermissionState { granted ->
+                if (granted) {
+                    android.widget.Toast.makeText(context, "Camera access granted! QR Scanner ready.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(context, "Camera permission needed for QR Scanner", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            
+            PremiumTeamUpScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onInnerViewChanged = onTeamInnerViewChanged,
+                onCreateGroup = { isChannel ->
+                    navController.navigate(Screen.CreateGroup.createRoute(isChannel))
+                },
+                onScanQR = {
+                    if (cameraPermissionState.hasPermission) {
+                        navController.navigate(Screen.QRScanner.route)
+                    } else {
+                        cameraPermissionState.requestPermission()
+                    }
+                },
+                initialGroupId = initialGroupId
             )
         }
         
@@ -454,6 +533,20 @@ fun BuddyLynkNavHost(
         composable(Screen.GoLive.route) {
             GoLiveScreen(
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        
+        // QR Scanner Screen
+        composable(Screen.QRScanner.route) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            QRScannerScreen(
+                onClose = { navController.popBackStack() },
+                onQRCodeScanned = { code ->
+                    // Handle scanned QR code
+                    android.widget.Toast.makeText(context, "Scanned: $code", android.widget.Toast.LENGTH_LONG).show()
+                    // TODO: Parse code and navigate accordingly (join team, add friend, etc.)
+                    navController.popBackStack()
+                }
             )
         }
         
@@ -516,6 +609,181 @@ fun BuddyLynkNavHost(
                     // Could navigate to group chat here
                 }
             )
+        }
+        
+        // Join Group via Invite Code Screen
+        composable(
+            route = Screen.JoinGroup.route,
+            arguments = listOf(
+                androidx.navigation.navArgument("inviteCode") {
+                    type = androidx.navigation.NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            val inviteCode = backStackEntry.arguments?.getString("inviteCode") ?: ""
+            val context = androidx.compose.ui.platform.LocalContext.current
+            
+            // UI State
+            var isLoading by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(true) }
+            var showSuccess by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+            var showError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+            var errorMessage by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+            var joinedGroupId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+            
+            // Join group logic
+            LaunchedEffect(inviteCode) {
+                if (inviteCode.isNotEmpty()) {
+                    android.util.Log.d("JoinGroup", "Joining group with invite code: $inviteCode")
+                    try {
+                        val result = com.orignal.buddylynk.data.api.ApiService.joinGroupViaInvite(inviteCode)
+                        if (result.isSuccess) {
+                            val groupData = result.getOrNull()
+                            val groupId = groupData?.optString("groupId") ?: ""
+                            android.util.Log.d("JoinGroup", "Successfully joined group: $groupId")
+                            isLoading = false
+                            if (groupId.isNotEmpty()) {
+                                joinedGroupId = groupId
+                                showSuccess = true
+                                // Wait a moment to show success popup, then navigate
+                                kotlinx.coroutines.delay(1500)
+                                navController.navigate(Screen.TeamUpWithGroup.createRoute(groupId)) {
+                                    popUpTo(Screen.Home.route)
+                                }
+                            } else {
+                                navController.popBackStack()
+                            }
+                        } else {
+                            android.util.Log.e("JoinGroup", "Failed to join group - link may be expired")
+                            isLoading = false
+                            errorMessage = "Invite link expired or invalid"
+                            showError = true
+                            kotlinx.coroutines.delay(2000)
+                            navController.popBackStack()
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("JoinGroup", "Error joining group: ${e.message}")
+                        isLoading = false
+                        errorMessage = "Invite link expired or invalid"
+                        showError = true
+                        kotlinx.coroutines.delay(2000)
+                        navController.popBackStack()
+                    }
+                }
+            }
+            
+            // Instagram-style top banner UI
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0A0A0A))
+            ) {
+                // Loading indicator at center
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isLoading,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(androidx.compose.ui.Alignment.Center)
+                ) {
+                    Column(
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color(0xFF3B82F6),
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            "Joining group...",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                        )
+                    }
+                }
+                
+                // Success banner - slides from TOP like Instagram
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showSuccess,
+                    enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.TopCenter)
+                        .statusBarsPadding()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(Color(0xFF10B981), Color(0xFF059669))
+                                ),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text(
+                                "Joined group successfully!",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+                
+                // Error banner - slides from TOP like Instagram
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showError,
+                    enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.TopCenter)
+                        .statusBarsPadding()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(Color(0xFFEF4444), Color(0xFFDC2626))
+                                ),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text(
+                                errorMessage,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

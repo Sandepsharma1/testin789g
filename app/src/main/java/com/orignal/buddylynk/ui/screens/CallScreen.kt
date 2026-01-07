@@ -27,8 +27,8 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
 
 // Colors
-private val CallGradientStart = Color(0xFF1A1A2E)
-private val CallGradientEnd = Color(0xFF16213E)
+private val CallGradientStart = Color(0xFF0A0A0A)
+private val CallGradientEnd = Color(0xFF0F0F13)
 private val AcceptGreen = Color(0xFF4CAF50)
 private val RejectRed = Color(0xFFE63946)
 private val ControlBg = Color(0xFF2A2A4A)

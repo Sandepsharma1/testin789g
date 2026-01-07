@@ -811,6 +811,138 @@ object ApiService {
         }
     }
     
+    // ========== GROUP INVITE LINKS ==========
+    
+    suspend fun getGroupInviteLinks(groupId: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/invite-links").get().build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "[]"
+            
+            if (response.isSuccessful) {
+                val array = JSONArray(body)
+                val links = mutableListOf<JSONObject>()
+                for (i in 0 until array.length()) {
+                    links.add(array.getJSONObject(i))
+                }
+                Result.success(links)
+            } else {
+                Result.failure(Exception("Failed to get invite links: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun createGroupInviteLink(groupId: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/invite-links")
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "{}"
+            
+            if (response.isSuccessful) {
+                Result.success(JSONObject(body))
+            } else {
+                Result.failure(Exception("Failed to create invite link: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun deleteGroupInviteLink(groupId: String, linkId: String, createNew: Boolean = false): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val url = "${ApiConfig.API_URL}/groups/$groupId/invite-links/$linkId" + 
+                if (createNew) "?createNew=true" else ""
+            val request = buildAuthRequest(url).delete().build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "{}"
+            
+            if (response.isSuccessful) {
+                Result.success(JSONObject(body))
+            } else {
+                Result.failure(Exception("Failed to delete invite link: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun joinGroupViaInvite(inviteCode: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/join/$inviteCode")
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "{}"
+            
+            if (response.isSuccessful) {
+                Result.success(JSONObject(body))
+            } else {
+                val errorMsg = try { JSONObject(body).optString("error", "Failed to join") } catch (e: Exception) { "Failed to join" }
+                Result.failure(Exception(errorMsg))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    // ========== GROUP MEMBER MANAGEMENT ==========
+    
+    suspend fun getGroupMembers(groupId: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/members").get().build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: "{}"
+            
+            if (response.isSuccessful) {
+                Result.success(JSONObject(body))
+            } else {
+                Result.failure(Exception("Failed to get members: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun promoteMember(groupId: String, userId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/members/$userId/promote")
+                .put("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            val response = client.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun demoteMember(groupId: String, userId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/members/$userId/demote")
+                .put("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            val response = client.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun removeGroupMember(groupId: String, userId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = buildAuthRequest("${ApiConfig.API_URL}/groups/$groupId/members/$userId")
+                .delete()
+                .build()
+            val response = client.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
     // ========== FCM TOKEN ==========
     
     suspend fun updateFcmToken(token: String): Result<Boolean> = withContext(Dispatchers.IO) {

@@ -37,7 +37,7 @@ import com.orignal.buddylynk.ui.components.PremiumPostCard
 import com.orignal.buddylynk.ui.viewmodel.SearchViewModel
 
 // Premium Colors
-private val DarkBg = Color(0xFF050505)
+private val DarkBg = Color(0xFF0A0A0A)
 private val CardBg = Color(0xFF1A1A1A)
 private val BorderWhite5 = Color.White.copy(alpha = 0.05f)
 private val BorderWhite10 = Color.White.copy(alpha = 0.1f)

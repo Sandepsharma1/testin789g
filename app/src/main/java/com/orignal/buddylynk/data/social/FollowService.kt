@@ -3,6 +3,7 @@ package com.orignal.buddylynk.data.social
 import com.orignal.buddylynk.data.auth.AuthManager
 import com.orignal.buddylynk.data.repository.BackendRepository
 import com.orignal.buddylynk.data.aws.DynamoDbService  // Kept for fallback operations not yet in API
+import com.orignal.buddylynk.data.api.ApiService
 import com.orignal.buddylynk.data.model.Follow
 import com.orignal.buddylynk.data.model.User
 import com.orignal.buddylynk.data.model.Activity
@@ -45,37 +46,25 @@ object FollowService {
         if (isFollowing(targetUserId)) return@withContext false
         
         try {
-            // Create follow record
-            val follow = Follow(
-                followId = UUID.randomUUID().toString(),
-                followerId = currentUser.userId,
-                followingId = targetUserId,
-                followerUsername = currentUser.username,
-                followerAvatar = currentUser.avatar,
-                createdAt = System.currentTimeMillis().toString()
-            )
+            android.util.Log.d("FollowService", "Following user: $targetUserId")
             
-            // Save to DynamoDB
-            val success = DynamoDbService.createFollow(follow)
+            // Use API service to follow (connects to backend database)
+            val result = ApiService.follow(targetUserId)
+            val success = result.getOrNull() == true
+            
+            android.util.Log.d("FollowService", "Follow result: $success")
             
             if (success) {
                 // Update local cache
                 _followingCache.value = _followingCache.value + targetUserId
                 
-                // Increment follower count in Redis
-                RedisService.incrementLikes("${KEY_FOLLOWERS}$targetUserId")
-                RedisService.incrementLikes("${KEY_FOLLOWING}${currentUser.userId}")
-                
                 // Create activity for the followed user
                 createFollowActivity(currentUser, targetUserId)
-                
-                // Update user's following count
-                updateUserCounts(currentUser.userId, followingDelta = 1)
-                updateUserCounts(targetUserId, followersDelta = 1)
             }
             
             success
         } catch (e: Exception) {
+            android.util.Log.e("FollowService", "Follow error: ${e.message}", e)
             false
         }
     }
@@ -87,24 +76,22 @@ object FollowService {
         val currentUser = AuthManager.currentUser.value ?: return@withContext false
         
         try {
-            // Delete follow record from DynamoDB
-            val success = DynamoDbService.deleteFollow(currentUser.userId, targetUserId)
+            android.util.Log.d("FollowService", "Unfollowing user: $targetUserId")
+            
+            // Use API service to unfollow (connects to backend database)
+            val result = ApiService.unfollow(targetUserId)
+            val success = result.getOrNull() == true
+            
+            android.util.Log.d("FollowService", "Unfollow result: $success")
             
             if (success) {
                 // Update local cache
                 _followingCache.value = _followingCache.value - targetUserId
-                
-                // Decrement counts in Redis
-                RedisService.decrementLikes("${KEY_FOLLOWERS}$targetUserId")
-                RedisService.decrementLikes("${KEY_FOLLOWING}${currentUser.userId}")
-                
-                // Update user counts
-                updateUserCounts(currentUser.userId, followingDelta = -1)
-                updateUserCounts(targetUserId, followersDelta = -1)
             }
             
             success
         } catch (e: Exception) {
+            android.util.Log.e("FollowService", "Unfollow error: ${e.message}", e)
             false
         }
     }
@@ -118,8 +105,14 @@ object FollowService {
         
         val currentUser = AuthManager.currentUser.value ?: return@withContext false
         
-        // Check DynamoDB
-        DynamoDbService.checkFollowing(currentUser.userId, targetUserId)
+        // Check via API
+        try {
+            val result = ApiService.isFollowing(targetUserId)
+            result.getOrNull() ?: false
+        } catch (e: Exception) {
+            android.util.Log.e("FollowService", "isFollowing check failed: ${e.message}")
+            false
+        }
     }
     
     /**

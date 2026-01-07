@@ -5,14 +5,19 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.orignal.buddylynk.data.api.ApiService
+import com.orignal.buddylynk.data.api.SmoothApiClient
 import com.orignal.buddylynk.data.model.User
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Authentication Manager - Handles login state and session persistence
  * SECURITY: Uses EncryptedSharedPreferences for JWT token storage
+ * PRODUCTION: Automatic logout when JWT expires (401 response)
  */
 object AuthManager {
     
@@ -36,6 +41,12 @@ object AuthManager {
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
     
+    // Indicates when user was force-logged out due to expired JWT
+    private val _sessionExpired = MutableStateFlow(false)
+    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+    
+    private val authScope = CoroutineScope(Dispatchers.Main)
+    
     /**
      * Initialize AuthManager with context - call from Application or MainActivity
      */
@@ -58,6 +69,15 @@ object AuthManager {
         } catch (e: Exception) {
             // Fallback to regular prefs if encryption fails (older devices)
             securePrefs = context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+        }
+        
+        // PRODUCTION: Set up auto-logout callback for JWT expiration (401 responses)
+        SmoothApiClient.setOnUnauthorizedCallback {
+            android.util.Log.w("AuthManager", "JWT expired - auto-logout triggered")
+            authScope.launch {
+                _sessionExpired.value = true
+                logout()
+            }
         }
         
         loadSavedSession()
@@ -130,6 +150,15 @@ object AuthManager {
         _currentUser.value = null
         _isLoggedIn.value = false
         ApiService.setAuthToken(null)
+        SmoothApiClient.setAuthToken(null)
+    }
+    
+    /**
+     * Clear the session expired flag after handling navigation
+     * Called after navigating to login to prevent repeated navigation
+     */
+    fun clearSessionExpiredFlag() {
+        _sessionExpired.value = false
     }
     
     /**

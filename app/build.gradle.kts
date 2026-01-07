@@ -31,6 +31,13 @@ android {
             keyAlias = "buddylynk"
             keyPassword = "buddylynk2024"
         }
+        // Use bundled debug keystore for consistent Google Sign-in across all PCs
+        getByName("debug") {
+            storeFile = file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
@@ -49,6 +56,7 @@ android {
         debug {
             isMinifyEnabled = false
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -160,6 +168,15 @@ dependencies {
     
     // Play Integrity API (Anti-tampering)
     implementation("com.google.android.play:integrity:1.3.0")
+    
+    // Google Mobile Ads SDK (AdMob)
+    implementation("com.google.android.gms:play-services-ads:23.6.0")
+    
+    // ZXing for QR Code generation
+    implementation("com.google.zxing:core:3.5.2")
+    
+    // Google ML Kit Barcode Scanning (for QR Scanner)
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -110,8 +110,8 @@ object BackendRepository {
     suspend fun getUserPosts(userId: String): List<Post> {
         return try {
             // Filter feed posts by userId
-            val allPosts = getFeedPosts()
-            allPosts.filter { it.userId == userId }
+            val feedResult = getFeedPosts()
+            feedResult.posts.filter { it.userId == userId }
         } catch (e: Exception) {
             Log.e(TAG, "API getUserPosts failed", e)
             emptyList()

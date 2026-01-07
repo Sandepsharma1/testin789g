@@ -132,6 +132,12 @@ fun PremiumPostCard(
     var isFullscreen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     
+    // Instagram-style device capability detection
+    val context = LocalContext.current
+    val performanceProfile = remember { com.orignal.buddylynk.ui.utils.DeviceCapabilities.getPerformanceProfile(context) }
+    val shouldAnimate = performanceProfile.animationLevel != com.orignal.buddylynk.ui.utils.DeviceCapabilities.PerformanceProfile.AnimationLevel.NONE
+    val isLowEndDevice = performanceProfile.tier == com.orignal.buddylynk.ui.utils.DeviceCapabilities.PerformanceProfile.Tier.LOW
+    
     // NSFW content handling - check admin flags and user settings
     val sensitiveMode by com.orignal.buddylynk.data.settings.SensitiveContentManager.contentMode.collectAsState()
     val isNSFWContent = post.isNSFW || post.isSensitive
@@ -141,31 +147,34 @@ fun PremiumPostCard(
     val shouldHidePost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.HIDE && !showNSFWContent
     val shouldBlurPost = isNSFWContent && sensitiveMode == com.orignal.buddylynk.data.settings.SensitiveContentManager.ContentMode.BLUR && !showNSFWContent
     
-    // Debug logging for NSFW
-    LaunchedEffect(post.postId, isNSFWContent, sensitiveMode) {
-        if (post.isNSFW || post.isSensitive) {
-            android.util.Log.d("NSFW_DEBUG", "Post ${post.postId.take(8)}: isNSFW=${post.isNSFW}, isSensitive=${post.isSensitive}, mode=$sensitiveMode, shouldBlur=$shouldBlurPost, shouldHide=$shouldHidePost")
-        }
+    // NSFW state check - simplified for performance
+    // Debug logging removed for production performance
+
+    // Animate card scale - based on device animation level
+    val animatedScale = if (!shouldAnimate) {
+        cardScale // No animation - direct value for LOW devices
+    } else {
+        animateFloatAsState(
+            targetValue = cardScale,
+            animationSpec = spring(dampingRatio = 0.5f, stiffness = 300f),
+            label = "cardScale"
+        ).value
     }
 
-    // Animate card scale
-    val animatedScale by animateFloatAsState(
-        targetValue = cardScale,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 300f),
-        label = "cardScale"
-    )
-
-    // Double tap handler
+    // Double tap handler - animation based on device capability
     val handleDoubleTap = {
         if (!isLiked) {
             onLike()
         }
-        showLikeAnimation = true
-        cardScale = 0.98f
-        scope.launch {
-            delay(600)
-            showLikeAnimation = false
-            cardScale = 1f
+        // Animation only for devices that support it
+        if (shouldAnimate) {
+            showLikeAnimation = true
+            cardScale = 0.98f
+            scope.launch {
+                delay(if (isLowEndDevice) 300L else 400L) // Faster on low-end
+                showLikeAnimation = false
+                cardScale = 1f
+            }
         }
     }
     
@@ -492,16 +501,11 @@ fun PremiumPostCard(
                         ) { page ->
                         val mediaUrl = allMediaUrls[page]
                         
-                        // Better video detection - check multiple formats
+                        // Video detection - simplified check for performance
                         val isVideo = mediaUrl.endsWith(".mp4", ignoreCase = true) || 
                                        mediaUrl.endsWith(".webm", ignoreCase = true) ||
                                        mediaUrl.endsWith(".mov", ignoreCase = true) ||
-                                       mediaUrl.endsWith(".avi", ignoreCase = true) ||
-                                       mediaUrl.endsWith(".mkv", ignoreCase = true) ||
-                                       mediaUrl.contains("/video/", ignoreCase = true) ||
                                        post.mediaType == "video"
-                        
-                        android.util.Log.d("PremiumPostCard", "Media URL: $mediaUrl, isVideo: $isVideo, mediaType: ${post.mediaType}")
                         
                         if (isVideo) {
                             // Video Player with pooled ExoPlayer (no re-buffering on scroll!)
@@ -530,6 +534,9 @@ fun PremiumPostCard(
                                 if (!isVisible) return@LaunchedEffect // Skip polling for off-screen videos
                                 
                                 exoPlayer?.let { player ->
+                                    // Device-aware polling interval (Instagram-style)
+                                    val pollInterval = com.orignal.buddylynk.ui.utils.DeviceCapabilities.getVideoPollInterval(context)
+                                    
                                     while (isVisible) {
                                         // Update buffering based on actual player state
                                         val shouldBuffer = player.playbackState == Player.STATE_BUFFERING
@@ -542,7 +549,7 @@ fun PremiumPostCard(
                                         isMutedState = FeedPlayerManager.isMuted
                                         player.volume = if (FeedPlayerManager.isMuted) 0f else 1f
                                         
-                                        delay(500) // Reduced from 100ms to 500ms for smoother scrolling
+                                        delay(pollInterval) // Device-aware polling interval
                                     }
                                 }
                             }
@@ -668,58 +675,29 @@ fun PremiumPostCard(
                                 }
                             }
                         } else {
-                            // Optimized Image display with shimmer loading
-                            // Add logging for debugging
-                            android.util.Log.d("PremiumPostCard", "Loading image: $mediaUrl")
+                            // OPTIMIZED Image display for smooth scrolling
+                            // Instagram-style device-aware optimizations:
+                            // 1. Size based on device tier (256/384/512px)
+                            // 2. Crossfade based on animation level
+                            // 3. Hardware bitmap for GPU rendering
+                            // 4. Aggressive caching
                             
-                            SubcomposeAsyncImage(
+                            val imageSize = com.orignal.buddylynk.ui.utils.DeviceCapabilities.getImageSize(context)
+                            
+                            AsyncImage(
                                 model = ImageRequest.Builder(context)
                                     .data(mediaUrl)
-                                    .crossfade(300)
+                                    .crossfade(if (shouldAnimate) 100 else 0) // Based on animation capability
+                                    .size(imageSize) // Device-aware size
                                     .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
                                     .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                                    .placeholder(ColorDrawable(android.graphics.Color.parseColor("#1A1A2E")))
+                                    .allowHardware(performanceProfile.useHardwareLayers) // Based on device capability
+                                    .placeholder(ColorDrawable(android.graphics.Color.parseColor("#1A1A1A")))
                                     .error(ColorDrawable(android.graphics.Color.parseColor("#1A1A2E")))
                                     .build(),
-                                contentDescription = "Post media ${page + 1}",
+                                contentDescription = "Post media",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                                loading = {
-                                    // Shimmer loading placeholder
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(CardBg)
-                                    ) {
-                                        ShimmerEffect(modifier = Modifier.fillMaxSize())
-                                    }
-                                },
-                                error = {
-                                    // Show error with URL for debugging
-                                    android.util.Log.e("PremiumPostCard", "Failed to load: $mediaUrl")
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color(0xFF1A1A2E)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Icon(
-                                                imageVector = Icons.Filled.BrokenImage,
-                                                contentDescription = "Error loading image",
-                                                tint = Color.White.copy(alpha = 0.5f),
-                                                modifier = Modifier.size(48.dp)
-                                            )
-                                            Spacer(Modifier.height(8.dp))
-                                            Text(
-                                                "Tap to retry",
-                                                color = Color.White.copy(alpha = 0.5f),
-                                                fontSize = 12.sp
-                                            )
-                                        }
-                                    }
-                                }
+                                contentScale = ContentScale.Crop
                             )
                         }
                     }

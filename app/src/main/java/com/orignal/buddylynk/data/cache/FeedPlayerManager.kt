@@ -67,10 +67,14 @@ object FeedPlayerManager {
     /**
      * Get or create a player for the given URL
      * If player exists, it's reused (no re-buffering!)
+     * IMPORTANT: Pauses all other videos - only one plays at a time
      */
     @Synchronized
     fun getPlayer(url: String, onBufferingChange: (Boolean) -> Unit, onError: () -> Unit): ExoPlayer? {
         val context = applicationContext ?: return null
+        
+        // PAUSE ALL OTHER VIDEOS - Only one video plays at a time
+        pauseAllExcept(url)
         
         // Check if player already exists for this URL
         players[url]?.let { existingPlayer ->
@@ -126,6 +130,19 @@ object FeedPlayerManager {
         
         players[url] = player
         return player
+    }
+    
+    /**
+     * Pause all players except the one with given URL
+     * This ensures only ONE video plays at a time
+     */
+    @Synchronized
+    fun pauseAllExcept(url: String) {
+        players.forEach { (playerUrl, player) ->
+            if (playerUrl != url) {
+                player.playWhenReady = false
+            }
+        }
     }
     
     /**

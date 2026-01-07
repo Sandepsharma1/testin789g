@@ -91,7 +91,8 @@ class SearchViewModel : ViewModel() {
                 
                 // Load trending posts - filter out blocked users
                 android.util.Log.d("SearchViewModel", "Fetching posts from API...")
-                val allPosts = BackendRepository.getFeedPosts()
+                val feedResult = BackendRepository.getFeedPosts()
+                val allPosts = feedResult.posts
                 android.util.Log.d("SearchViewModel", "Loaded ${allPosts.size} posts from API")
                 
                 // Filter out blocked users' posts
@@ -170,8 +171,8 @@ class SearchViewModel : ViewModel() {
                     _users.value = searchedUsers
                     
                     android.util.Log.d("SearchViewModel", "performSearch: Searching posts...")
-                    val allPosts = BackendRepository.getFeedPosts()
-                    val searchedPosts = allPosts.filter { it.content.contains(query, ignoreCase = true) }.take(10)
+                    val feedResult = BackendRepository.getFeedPosts()
+                    val searchedPosts = feedResult.posts.filter { it.content.contains(query, ignoreCase = true) }.take(10)
                     android.util.Log.d("SearchViewModel", "performSearch: Found ${searchedPosts.size} posts")
                     _posts.value = searchedPosts
                 }
@@ -185,8 +186,8 @@ class SearchViewModel : ViewModel() {
                 else -> {
                     // For Teams, Events, Topics - search posts with tags
                     _users.value = emptyList()
-                    val allPosts = BackendRepository.getFeedPosts()
-                    val searchedPosts = allPosts.filter { it.content.contains(query, ignoreCase = true) }.take(20)
+                    val feedResult = BackendRepository.getFeedPosts()
+                    val searchedPosts = feedResult.posts.filter { it.content.contains(query, ignoreCase = true) }.take(20)
                     android.util.Log.d("SearchViewModel", "performSearch: Found ${searchedPosts.size} posts")
                     _posts.value = searchedPosts
                 }

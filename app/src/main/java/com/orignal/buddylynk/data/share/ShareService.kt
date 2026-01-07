@@ -131,6 +131,23 @@ object ShareService {
     fun getWebLink(path: String): String {
         return "https://app.buddylynk.com/$path"
     }
+    
+    /**
+     * Generate invite link for team/channel
+     */
+    fun getInviteLink(inviteCode: String): String {
+        return "https://app.buddylynk.com/invite/$inviteCode"
+    }
+    
+    /**
+     * Share team invite link
+     */
+    fun shareInviteLink(context: Context, inviteCode: String, teamName: String) {
+        val deepLink = getInviteLink(inviteCode)
+        val shareText = "Join $teamName on BuddyLynk!\n$deepLink"
+        
+        shareText(context, shareText, "Share Invite Link")
+    }
 }
 
 /**
@@ -152,6 +169,7 @@ object DeepLinkHandler {
                 "post" -> path.firstOrNull()?.let { DeepLinkDestination.Post(it) }
                 "user" -> path.firstOrNull()?.let { DeepLinkDestination.Profile(it) }
                 "chat" -> path.firstOrNull()?.let { DeepLinkDestination.Chat(it) }
+                "invite" -> path.firstOrNull()?.let { DeepLinkDestination.Invite(it) }
                 "activity" -> DeepLinkDestination.Activity
                 else -> null
             }
@@ -163,6 +181,7 @@ object DeepLinkHandler {
                 "post" -> path.getOrNull(1)?.let { DeepLinkDestination.Post(it) }
                 "user" -> path.getOrNull(1)?.let { DeepLinkDestination.Profile(it) }
                 "chat" -> path.getOrNull(1)?.let { DeepLinkDestination.Chat(it) }
+                "invite" -> path.getOrNull(1)?.let { DeepLinkDestination.Invite(it) }
                 else -> null
             }
         }
@@ -178,5 +197,7 @@ sealed class DeepLinkDestination {
     data class Post(val postId: String) : DeepLinkDestination()
     data class Profile(val userId: String) : DeepLinkDestination()
     data class Chat(val conversationId: String) : DeepLinkDestination()
+    data class Invite(val inviteCode: String) : DeepLinkDestination()
     data object Activity : DeepLinkDestination()
 }
+

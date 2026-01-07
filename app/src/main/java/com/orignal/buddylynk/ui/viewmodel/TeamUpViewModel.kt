@@ -6,6 +6,7 @@ import com.orignal.buddylynk.data.auth.AuthManager
 import com.orignal.buddylynk.data.repository.BackendRepository
 import com.orignal.buddylynk.data.aws.DynamoDbService
 import com.orignal.buddylynk.data.aws.getGroupPosts
+import com.orignal.buddylynk.data.state.AppStateManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,8 @@ import kotlinx.coroutines.launch
 /**
  * TeamUpViewModel - Fetches real teams/groups via BackendRepository
  * Uses API or DynamoDB based on BackendRepository.USE_API setting
+ * 
+ * State Persistence: Saves selected team and scroll position to restore on app reopen
  */
 class TeamUpViewModel : ViewModel() {
     
@@ -38,8 +41,57 @@ class TeamUpViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
     
+    // State persistence - track selected team
+    private val _selectedTeamId = MutableStateFlow<String?>(null)
+    val selectedTeamId: StateFlow<String?> = _selectedTeamId.asStateFlow()
+    
+    private val _isInnerViewOpen = MutableStateFlow(false)
+    val isInnerViewOpen: StateFlow<Boolean> = _isInnerViewOpen.asStateFlow()
+    
+    // Scroll position for restoration
+    var savedScrollIndex: Int = 0
+        private set
+    var savedScrollOffset: Int = 0
+        private set
+    
     init {
+        // Restore saved state
+        restoreSavedState()
         loadTeams()
+    }
+    
+    private fun restoreSavedState() {
+        val savedState = AppStateManager.getTeamUpState()
+        _selectedTeamId.value = savedState.selectedTeamId
+        _isInnerViewOpen.value = savedState.isInnerViewOpen
+        savedScrollIndex = savedState.scrollIndex
+        savedScrollOffset = savedState.scrollOffset
+    }
+    
+    fun selectTeam(teamId: String?) {
+        _selectedTeamId.value = teamId
+        _isInnerViewOpen.value = teamId != null
+        saveState()
+    }
+    
+    fun closeInnerView() {
+        _isInnerViewOpen.value = false
+        saveState()
+    }
+    
+    fun saveScrollPosition(scrollIndex: Int, scrollOffset: Int) {
+        savedScrollIndex = scrollIndex
+        savedScrollOffset = scrollOffset
+        saveState()
+    }
+    
+    private fun saveState() {
+        AppStateManager.saveTeamUpState(
+            selectedTeamId = _selectedTeamId.value,
+            scrollIndex = savedScrollIndex,
+            scrollOffset = savedScrollOffset,
+            isInnerViewOpen = _isInnerViewOpen.value
+        )
     }
     
     fun loadTeams() {

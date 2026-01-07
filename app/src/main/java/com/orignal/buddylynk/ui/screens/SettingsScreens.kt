@@ -551,8 +551,8 @@ fun SavedPostsScreen(
             
             if (savedIds.isNotEmpty()) {
                 // Get all feed posts and filter to just the saved ones
-                val allPosts = BackendRepository.getFeedPosts()
-                val savedPostsList = allPosts.filter { post -> 
+                val feedResult = BackendRepository.getFeedPosts()
+                val savedPostsList = feedResult.posts.filter { post -> 
                     savedIds.contains(post.postId) 
                 }
                 savedPosts = savedPostsList

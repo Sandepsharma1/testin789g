@@ -98,7 +98,7 @@ fun EditProfileScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF050505))
+            .background(Color(0xFF0A0A0A))
     ) {
         // Background orbs
         FuturisticEditBackground()

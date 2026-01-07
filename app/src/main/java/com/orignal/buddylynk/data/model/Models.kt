@@ -24,7 +24,11 @@ data class User(
 
 /**
  * Post data model - Matches Buddylynk_Posts DynamoDB table
+ * 
+ * @Stable annotation tells Compose that this class is immutable
+ * and prevents unnecessary recomposition when scrolling
  */
+@androidx.compose.runtime.Stable
 data class Post(
     val postId: String,
     val userId: String,

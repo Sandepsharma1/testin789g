@@ -2,23 +2,23 @@
 <!--
     Network Security Configuration for Buddylynk
     Production-ready security settings
+    
+    SECURITY: All API traffic goes through HTTPS via CloudFront (app.buddylynk.com)
 -->
 <network-security-config>
-    <!-- Default: Allow cleartext only for development, block in production -->
+    <!-- SECURITY: Block all cleartext (HTTP) traffic -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
     
-    <!-- Allow our EC2 backend (until SSL is configured) -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">52.0.95.126</domain>
-    </domain-config>
-    
-    <!-- Allow S3 for media -->
+    <!-- AWS S3/CloudFront for media (HTTPS only) -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">amazonaws.com</domain>
+        <domain includeSubdomains="true">cloudfront.net</domain>
+        <domain includeSubdomains="true">buddylynk.com</domain>
+        <domain includeSubdomains="true">app.buddylynk.com</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

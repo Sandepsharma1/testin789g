@@ -42,7 +42,7 @@ import com.orignal.buddylynk.ui.viewmodel.*
 private val PremiumPurple = Color(0xFF8B5CF6)
 private val PremiumIndigo = Color(0xFF6366F1)
 private val PremiumPink = Color(0xFFEC4899)
-private val DarkBg = Color(0xFF000000)
+private val DarkBg = Color(0xFF0A0A0A)
 private val CardBg = Color(0xFF18181B)
 private val BorderColor = Color(0xFF27272A)
 

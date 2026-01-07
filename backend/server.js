@@ -19,13 +19,22 @@ const groupRoutes = require('./routes/groups');
 const blockRoutes = require('./routes/blocks');
 const nsfwRoutes = require('./routes/nsfw');
 const behaviorRoutes = require('./routes/behavior');
+const integrityRoutes = require('./routes/integrity');
 const { initializeSignaling } = require('./services/signaling');
 
 const app = express();
 const server = http.createServer(app);
 
+// Trust proxy - required when behind nginx/load balancer
+app.set('trust proxy', 1);
+
 // Serve assetlinks.json for Android App Links verification
 app.use('/.well-known', express.static(path.join(__dirname, '.well-known')));
+
+// Serve ads.txt for AdMob verification
+app.get('/ads.txt', (req, res) => {
+    res.type('text/plain').sendFile(path.join(__dirname, 'ads.txt'));
+});
 
 // Socket.io for WebRTC call signaling - SECURITY: Restrict CORS
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
@@ -113,6 +122,7 @@ app.use('/api/follows', followRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/blocks', blockRoutes);
+app.use('/api/integrity', integrityRoutes);
 app.use('/api/nsfw', nsfwRoutes); // Admin NSFW content flagging
 app.use('/api/behavior', behaviorRoutes); // MindFlow algorithm behavior tracking
 
@@ -183,6 +193,43 @@ app.get('/user/:userId', (req, res) => {
                 <div class="container">
                     <h1>BuddyLynk</h1>
                     <p>Download the app to view this profile</p>
+                    <a class="btn" href="https://play.google.com/store/apps/details?id=com.orignal.buddylynk">Get the App</a>
+                </div>
+            </body>
+            </html>
+        `);
+    }
+});
+
+// Invite link deep handler - redirect to app to join team
+app.get('/invite/:code', (req, res) => {
+    const code = req.params.code;
+    const userAgent = req.headers['user-agent'] || '';
+    const isAndroid = userAgent.toLowerCase().includes('android');
+
+    if (isAndroid) {
+        const intentUrl = `intent://invite/${code}#Intent;scheme=buddylynk;package=com.orignal.buddylynk;S.browser_fallback_url=https://play.google.com/store/apps/details?id=com.orignal.buddylynk;end`;
+        res.redirect(intentUrl);
+    } else {
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>BuddyLynk - Join Team</title>
+                <style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; color: white; }
+                    .container { text-align: center; padding: 40px; }
+                    h1 { font-size: 2.5rem; margin-bottom: 20px; background: linear-gradient(90deg, #22D3EE, #8B5CF6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+                    p { color: #a0aec0; margin-bottom: 30px; }
+                    .btn { display: inline-block; padding: 15px 40px; background: linear-gradient(90deg, #22D3EE, #8B5CF6); color: white; text-decoration: none; border-radius: 30px; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>You're Invited!</h1>
+                    <p>Download BuddyLynk to join this team</p>
                     <a class="btn" href="https://play.google.com/store/apps/details?id=com.orignal.buddylynk">Get the App</a>
                 </div>
             </body>

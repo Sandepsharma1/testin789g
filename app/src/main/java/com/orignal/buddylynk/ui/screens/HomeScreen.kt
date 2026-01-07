@@ -362,21 +362,29 @@ fun HomeScreen(
                 
                 // Real posts from AWS - Premium Cards with Action Capsule
                 if (posts.isNotEmpty()) {
+                    // Banner Ad after first 3 posts
+                    item {
+                        if (posts.size >= 3) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            com.orignal.buddylynk.ui.components.BannerAd(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+                    
                     itemsIndexed(posts, key = { _, post -> post.postId }) { index, post ->
-                        // Animate each post with fade-in + slide-up effect
-                        var isVisible by remember { mutableStateOf(false) }
-                        LaunchedEffect(post.postId) {
-                            isVisible = true
+                        // Show banner ad after every 5 posts
+                        if (index > 0 && index % 5 == 0) {
+                            com.orignal.buddylynk.ui.components.BannerAd(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
                         }
                         
-                        AnimatedVisibility(
-                            visible = isVisible,
-                            enter = fadeIn(animationSpec = tween(300)) + 
-                                   slideInVertically(
-                                       animationSpec = tween(300),
-                                       initialOffsetY = { it / 4 }
-                                   )
-                        ) {
                         PremiumPostCard(
                             post = post,
                             isLiked = post.isLiked,
@@ -431,7 +439,6 @@ fun HomeScreen(
                             onAvatarLongPress = { /* TODO: Show story */ },
                             onNavigateToShorts = onNavigateToShorts
                         )
-                        } // End AnimatedVisibility
                         Spacer(modifier = Modifier.height(40.dp))
                     }
                 } else if (!isLoading && error == null && posts.isEmpty()) {
@@ -480,7 +487,7 @@ fun HomeScreen(
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
-                                color = VibrantPurple,
+                                color = MaterialTheme.colorScheme.primary,
                                 strokeWidth = 3.dp
                             )
                         }

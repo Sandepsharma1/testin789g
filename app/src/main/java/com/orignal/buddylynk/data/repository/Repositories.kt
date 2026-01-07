@@ -40,7 +40,7 @@ class UserRepository {
 class PostRepository {
     
     suspend fun getFeedPosts(limit: Int = 20): List<Post> {
-        return BackendRepository.getFeedPosts()
+        return BackendRepository.getFeedPosts().posts
     }
     
     suspend fun createPost(post: Post): Boolean {

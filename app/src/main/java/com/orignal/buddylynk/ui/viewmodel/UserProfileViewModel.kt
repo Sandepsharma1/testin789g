@@ -125,20 +125,31 @@ class UserProfileViewModel : ViewModel() {
      * Toggle follow/unfollow
      */
     fun toggleFollow() {
-        if (currentUserId.isBlank()) return
+        if (currentUserId.isBlank()) {
+            android.util.Log.e("UserProfileVM", "toggleFollow: currentUserId is blank")
+            return
+        }
+        
+        android.util.Log.d("UserProfileVM", "toggleFollow called for $currentUserId, isFollowing=${_isFollowing.value}")
         
         viewModelScope.launch {
             _isFollowLoading.value = true
             
             try {
-                val success = if (_isFollowing.value) {
+                val wasFollowing = _isFollowing.value
+                android.util.Log.d("UserProfileVM", "About to ${if (wasFollowing) "UNFOLLOW" else "FOLLOW"}")
+                
+                val success = if (wasFollowing) {
                     FollowService.unfollowUser(currentUserId)
                 } else {
                     FollowService.followUser(currentUserId)
                 }
                 
+                android.util.Log.d("UserProfileVM", "toggleFollow result: success=$success")
+                
                 if (success) {
-                    _isFollowing.value = !_isFollowing.value
+                    _isFollowing.value = !wasFollowing
+                    android.util.Log.d("UserProfileVM", "State updated: isFollowing now ${_isFollowing.value}")
                     
                     // Update profile
                     _userProfile.value?.let { profile ->
@@ -154,8 +165,11 @@ class UserProfileViewModel : ViewModel() {
                             isMutual = _isFollowing.value && profile.isFollower
                         )
                     }
+                } else {
+                    android.util.Log.e("UserProfileVM", "toggleFollow FAILED!")
                 }
             } catch (e: Exception) {
+                android.util.Log.e("UserProfileVM", "toggleFollow exception: ${e.message}", e)
                 _error.value = e.message
             } finally {
                 _isFollowLoading.value = false

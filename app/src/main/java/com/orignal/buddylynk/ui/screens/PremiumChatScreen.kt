@@ -41,11 +41,11 @@ import com.orignal.buddylynk.ui.viewmodel.ChatListViewModel
 import kotlinx.coroutines.delay
 
 // Premium Colors
-private val DarkBg = Color(0xFF09090B)
+private val DarkBg = Color(0xFF0A0A0A)
 private val IndigoAccent = Color(0xFF6366F1)
 private val VioletAccent = Color(0xFFA78BFA)
 private val PurpleAccent = Color(0xFF8B5CF6)
-private val ZincDark = Color(0xFF18181B)
+private val ZincDark = Color(0xFF0A0A0A)
 private val Zinc800 = Color(0xFF27272A)
 private val Zinc600 = Color(0xFF52525B)
 private val Zinc500 = Color(0xFF71717A)

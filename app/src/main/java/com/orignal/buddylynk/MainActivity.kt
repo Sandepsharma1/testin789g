@@ -40,9 +40,19 @@ class MainActivity : ComponentActivity() {
     companion object {
         // Pending deep link to be processed after login
         var pendingDeepLink: android.net.Uri? = null
+        // Trigger to force recomposition when deep link arrives while app is open
+        var deepLinkTrigger: Int = 0
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Enable edge-to-edge BEFORE super.onCreate() to prevent crash
+        try {
+            enableEdgeToEdge()
+        } catch (e: Exception) {
+            // Silent fail - edge-to-edge is optional UI enhancement
+            android.util.Log.w("MainActivity", "enableEdgeToEdge failed: ${e.message}")
+        }
+        
         super.onCreate(savedInstanceState)
         
         // Initialize AuthManager for session persistence
@@ -54,10 +64,16 @@ class MainActivity : ComponentActivity() {
         // Initialize LikedPostsManager for local like persistence
         com.orignal.buddylynk.data.settings.LikedPostsManager.init(this)
         
+        // Initialize Google Certified CMP (Consent Management Platform) for GDPR
+        // Then initialize AdMob after consent is obtained
+        com.orignal.buddylynk.data.ads.ConsentManager.initialize(this) {
+            // Consent obtained or not required, now initialize ads
+            com.orignal.buddylynk.data.ads.AdMobManager.initialize(this)
+        }
+        
         // Handle deep link from launch intent
         handleDeepLink(intent)
         
-        enableEdgeToEdge()
         setContent {
             BuddylynkTheme(darkTheme = true) {
                 BuddyLynkApp()
@@ -77,6 +93,9 @@ class MainActivity : ComponentActivity() {
             android.util.Log.d("MainActivity", "Deep link received: $data")
             android.util.Log.d("MainActivity", "Host: ${data.host}, Path: ${data.path}")
             pendingDeepLink = data
+            // Increment trigger to force LaunchedEffect to rerun when app is already open
+            deepLinkTrigger++
+            android.util.Log.d("MainActivity", "DeepLink trigger incremented to: $deepLinkTrigger")
         }
     }
 }
@@ -109,6 +128,79 @@ fun BuddyLynkApp() {
         if (isRetrying) {
             delay(2000)
             isRetrying = false
+        }
+    }
+    
+    // PRODUCTION: Auto-logout when JWT expires - observe sessionExpired
+    val sessionExpired by com.orignal.buddylynk.data.auth.AuthManager.sessionExpired.collectAsState()
+    LaunchedEffect(sessionExpired) {
+        if (sessionExpired) {
+            android.util.Log.w("BuddyLynkApp", "Session expired - navigating to login")
+            // Show toast to user
+            android.widget.Toast.makeText(
+                context, 
+                "Session expired. Please login again.", 
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            // Navigate to login and clear back stack
+            navController.navigate(com.orignal.buddylynk.navigation.Screen.Login.route) {
+                popUpTo(0) { inclusive = true }
+            }
+            // Reset the flag (to prevent repeated navigation)
+            com.orignal.buddylynk.data.auth.AuthManager.clearSessionExpiredFlag()
+        }
+    }
+    
+    // Track deep link trigger changes
+    var localDeepLinkTrigger by remember { mutableStateOf(MainActivity.deepLinkTrigger) }
+    
+    // Check for trigger changes periodically (when app is already open)
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(500) // Check every 500ms
+            if (MainActivity.deepLinkTrigger != localDeepLinkTrigger) {
+                localDeepLinkTrigger = MainActivity.deepLinkTrigger
+            }
+        }
+    }
+    
+    // Handle pending deep links - process immediately when we're on any screen after login
+    LaunchedEffect(currentRoute, localDeepLinkTrigger) {
+        android.util.Log.d("DeepLink", "LaunchedEffect triggered, currentRoute: $currentRoute, pendingDeepLink: ${MainActivity.pendingDeepLink}, trigger: $localDeepLinkTrigger")
+        
+        // Don't process on splash or login screens
+        val loginScreens = listOf(Screen.Splash.route, Screen.Login.route, Screen.Register.route)
+        if (currentRoute != null && currentRoute !in loginScreens && MainActivity.pendingDeepLink != null) {
+            val uri = MainActivity.pendingDeepLink
+            MainActivity.pendingDeepLink = null // Clear to prevent re-processing
+            
+            uri?.let { deepLinkUri ->
+                android.util.Log.d("DeepLink", "Processing pending deep link: $deepLinkUri")
+                val destination = com.orignal.buddylynk.data.share.DeepLinkHandler.parseDeepLink(deepLinkUri)
+                android.util.Log.d("DeepLink", "Parsed destination: $destination")
+                
+                when (destination) {
+                    is com.orignal.buddylynk.data.share.DeepLinkDestination.Post -> {
+                        android.util.Log.d("DeepLink", "Navigating to PostDetail: ${destination.postId}")
+                        navController.navigate(Screen.PostDetail.createRoute(destination.postId))
+                    }
+                    is com.orignal.buddylynk.data.share.DeepLinkDestination.Profile -> {
+                        android.util.Log.d("DeepLink", "Navigating to UserProfile: ${destination.userId}")
+                        navController.navigate(Screen.UserProfile.createRoute(destination.userId))
+                    }
+                    is com.orignal.buddylynk.data.share.DeepLinkDestination.Invite -> {
+                        android.util.Log.d("DeepLink", "Navigating to JoinGroup with code: ${destination.inviteCode}")
+                        navController.navigate(Screen.JoinGroup.createRoute(destination.inviteCode))
+                    }
+                    is com.orignal.buddylynk.data.share.DeepLinkDestination.Chat -> {
+                        android.util.Log.d("DeepLink", "Navigating to Chat: ${destination.conversationId}")
+                        navController.navigate(Screen.Chat.createRoute(destination.conversationId))
+                    }
+                    else -> {
+                        android.util.Log.d("DeepLink", "Unknown deep link destination: $destination")
+                    }
+                }
+            }
         }
     }
     

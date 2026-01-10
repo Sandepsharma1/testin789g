@@ -377,7 +377,7 @@ fun PremiumPostCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(4f / 5f)
+                    .height(550.dp) // Fixed 520dp height
                     .clip(RectangleShape)
                     .background(
                         Brush.verticalGradient(
@@ -434,7 +434,7 @@ fun PremiumPostCard(
                 }
             }
         } else {
-        // Instagram-style: User Header ABOVE the image
+        // Threads-style: User Header + Caption ABOVE the media
         UserInfoBar(
             username = post.username ?: "User",
             avatar = post.userAvatar,
@@ -453,15 +453,58 @@ fun PremiumPostCard(
                 .padding(horizontal = 12.dp, vertical = 4.dp)
         )
         
-        // Image Container
+        // Threads-style: Caption ABOVE media (textPosition: aboveMedia)
+        // Expandable text - max 4 lines with "more" button
+        if (post.content.isNotBlank()) {
+            var isExpanded by remember { mutableStateOf(false) }
+            var isOverflowing by remember { mutableStateOf(false) }
+            
+            Spacer(modifier = Modifier.height(4.dp)) // usernameToText: 4dp
+            
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            ) {
+                Text(
+                    text = post.content,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    maxLines = if (isExpanded) Int.MAX_VALUE else 4,
+                    overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { textLayoutResult ->
+                        // Check if text is truncated
+                        if (!isExpanded) {
+                            isOverflowing = textLayoutResult.hasVisualOverflow
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                // Show "more" or "less" button
+                if (isOverflowing || isExpanded) {
+                    Text(
+                        text = if (isExpanded) "less" else "more",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable { isExpanded = !isExpanded }
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(10.dp)) // Top margin from text: 10dp
+        }
+        
+        // Media Container - 16dp padding, 440dp height, 12dp corners
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(4f / 5f) // Instagram-style 4:5 ratio - content fills better
+                .padding(horizontal = 16.dp) // Container padding: 16dp
                 .scale(animatedScale)
-                .clip(RectangleShape)
-                .background(CardBg)
-                .border(0.dp, Color.Transparent, RectangleShape)
                 // NOTE: Blur is now applied ONLY to the thumbnail inside the overlay, not here
                 .pointerInput(Unit) {
                     detectTapGestures(
@@ -498,18 +541,51 @@ fun PremiumPostCard(
             
             if (allMediaUrls.isNotEmpty()) {
                 var currentPage by remember { mutableIntStateOf(0) }
+                var isFullscreenGallery by remember { mutableStateOf(false) }
+                var galleryStartIndex by remember { mutableIntStateOf(0) }
                 
-                Box(modifier = Modifier.fillMaxSize()) {
+                // Check if ANY media is video
+                val hasVideo = allMediaUrls.any { url ->
+                    url.endsWith(".mp4", ignoreCase = true) ||
+                    url.endsWith(".webm", ignoreCase = true) ||
+                    url.endsWith(".mov", ignoreCase = true) ||
+                    url.endsWith(".avi", ignoreCase = true) ||
+                    url.endsWith(".mkv", ignoreCase = true) ||
+                    url.contains("/video/", ignoreCase = true)
+                }
+                
+                Box(modifier = Modifier.wrapContentHeight()) {
                     // CRITICAL: Only render actual media when NOT blurred
                     // When shouldBlurPost is true, we skip rendering actual content entirely
                     if (!shouldBlurPost) {
-                        // Media display with swipe support - ONLY when not blurred
-                        androidx.compose.foundation.pager.HorizontalPager(
-                            state = androidx.compose.foundation.pager.rememberPagerState { allMediaUrls.size }.also { 
-                                currentPage = it.currentPage 
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        ) { page ->
+                        // Threads-style: Use GRID layout for images, HorizontalPager for videos only
+                        if (!hasVideo && allMediaUrls.size >= 2) {
+                            // Multiple IMAGES - Use Threads-style grid layout
+                            ThreadsMediaGrid(
+                                mediaUrls = allMediaUrls,
+                                onMediaClick = { index ->
+                                    galleryStartIndex = index
+                                    isFullscreenGallery = true
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            // Single image OR videos - use HorizontalPager for swipe
+                            androidx.compose.foundation.pager.HorizontalPager(
+                                state = androidx.compose.foundation.pager.rememberPagerState { allMediaUrls.size }.also { 
+                                    currentPage = it.currentPage 
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth() // Media width: match_parent
+                                    .height(550.dp) // Fixed 520dp height
+                                    .clip(RoundedCornerShape(12.dp)) // Border radius: 12dp
+                            ) { page ->
+                        // CRITICAL: Solid black background to prevent adjacent pages from bleeding through
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black)
+                        ) {
                         val mediaUrl = allMediaUrls[page]
                         
                         // Better video detection - check multiple formats
@@ -518,8 +594,7 @@ fun PremiumPostCard(
                                        mediaUrl.endsWith(".mov", ignoreCase = true) ||
                                        mediaUrl.endsWith(".avi", ignoreCase = true) ||
                                        mediaUrl.endsWith(".mkv", ignoreCase = true) ||
-                                       mediaUrl.contains("/video/", ignoreCase = true) ||
-                                       post.mediaType == "video"
+                                       mediaUrl.contains("/video/", ignoreCase = true)
                         
                         android.util.Log.d("PremiumPostCard", "Media URL: $mediaUrl, isVideo: $isVideo, mediaType: ${post.mediaType}")
                         
@@ -589,7 +664,14 @@ fun PremiumPostCard(
                                 }
                             }
                             
-                            Box(modifier = Modifier.fillMaxSize()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable { 
+                                        galleryStartIndex = page
+                                        isFullscreenGallery = true 
+                                    }
+                            ) {
                                 if (!hasError && exoPlayer != null) {
                                     AndroidView(
                                         factory = { ctx ->
@@ -703,8 +785,13 @@ fun PremiumPostCard(
                                     .error(ColorDrawable(android.graphics.Color.parseColor("#1A1A2E")))
                                     .build(),
                                 contentDescription = "Post media ${page + 1}",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable { 
+                                        galleryStartIndex = page
+                                        isFullscreenGallery = true 
+                                    },
+                                contentScale = ContentScale.Crop, // centerCrop - fill and crop
                                 loading = {
                                     // Shimmer loading placeholder
                                     Box(
@@ -742,10 +829,12 @@ fun PremiumPostCard(
                                 }
                             )
                         }
-                    }
+                        } // End Box with black background
+                        } // end HorizontalPager trailing lambda
+                        } // end else block (HorizontalPager for single/video)
                     
-                    // Pagination dots (only show if multiple media)
-                    if (allMediaUrls.size > 1) {
+                    // Pagination dots (only show for HorizontalPager - videos/single image swiping)
+                    if (allMediaUrls.size > 1 && hasVideo) {
                         Row(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
@@ -788,7 +877,249 @@ fun PremiumPostCard(
                         }
                     }
                     } // end if (!shouldBlurPost)
-                } // end Box(modifier = Modifier.fillMaxSize())
+                } // end Box(modifier = Modifier.wrapContentHeight())
+                
+                // Fullscreen Gallery Dialog for single media / videos
+                if (isFullscreenGallery) {
+                    androidx.compose.ui.window.Dialog(
+                        onDismissRequest = { isFullscreenGallery = false },
+                        properties = androidx.compose.ui.window.DialogProperties(
+                            dismissOnBackPress = true,
+                            dismissOnClickOutside = false,
+                            usePlatformDefaultWidth = false
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black)
+                                .systemBarsPadding()
+                        ) {
+                            val fullscreenPagerState = androidx.compose.foundation.pager.rememberPagerState(
+                                initialPage = galleryStartIndex
+                            ) { allMediaUrls.size }
+                            
+                            androidx.compose.foundation.pager.HorizontalPager(
+                                state = fullscreenPagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                val mediaUrl = allMediaUrls[page]
+                                val isVideo = mediaUrl.endsWith(".mp4", ignoreCase = true) ||
+                                              mediaUrl.endsWith(".webm", ignoreCase = true) ||
+                                              mediaUrl.endsWith(".mov", ignoreCase = true) ||
+                                              mediaUrl.endsWith(".avi", ignoreCase = true) ||
+                                              mediaUrl.endsWith(".mkv", ignoreCase = true) ||
+                                              mediaUrl.contains("/video/", ignoreCase = true)
+                                
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isVideo) {
+                                        // Video Player in fullscreen
+                                        var isPlaying by remember { mutableStateOf(true) }
+                                        
+                                        val exoPlayer = remember(mediaUrl) {
+                                            ExoPlayer.Builder(context).build().apply {
+                                                setMediaItem(MediaItem.fromUri(mediaUrl))
+                                                prepare()
+                                                playWhenReady = true
+                                                repeatMode = Player.REPEAT_MODE_ONE
+                                            }
+                                        }
+                                        
+                                        DisposableEffect(exoPlayer) {
+                                            onDispose { exoPlayer.release() }
+                                        }
+                                        
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clickable {
+                                                    isPlaying = !isPlaying
+                                                    exoPlayer.playWhenReady = isPlaying
+                                                }
+                                        ) {
+                                            AndroidView(
+                                                factory = { ctx ->
+                                                    PlayerView(ctx).apply {
+                                                        player = exoPlayer
+                                                        useController = false
+                                                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                                        layoutParams = FrameLayout.LayoutParams(
+                                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                                        )
+                                                        setBackgroundColor(android.graphics.Color.BLACK)
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                            
+                                            // Play/Pause overlay
+                                            if (!isPlaying) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.Center)
+                                                        .size(72.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color.Black.copy(alpha = 0.6f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.PlayArrow,
+                                                        contentDescription = "Play",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(48.dp)
+                                                    )
+                                                }
+                                            }
+                                            
+                                            // Video controls at bottom - Timeline + Mute button
+                                            var currentPosition by remember { mutableStateOf(0L) }
+                                            var duration by remember { mutableStateOf(0L) }
+                                            var isMuted by remember { mutableStateOf(false) }
+                                            
+                                            // Update position periodically
+                                            LaunchedEffect(exoPlayer) {
+                                                while (true) {
+                                                    currentPosition = exoPlayer.currentPosition
+                                                    duration = exoPlayer.duration.coerceAtLeast(1L)
+                                                    delay(200)
+                                                }
+                                            }
+                                            
+                                            // Bottom controls row
+                                            Row(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomCenter)
+                                                    .fillMaxWidth()
+                                                    .background(
+                                                        Brush.verticalGradient(
+                                                            colors = listOf(
+                                                                Color.Transparent,
+                                                                Color.Black.copy(alpha = 0.7f)
+                                                            )
+                                                        )
+                                                    )
+                                                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                // Current time
+                                                Text(
+                                                    text = formatDuration(currentPosition),
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                
+                                                // Timeline Slider
+                                                androidx.compose.material3.Slider(
+                                                    value = if (duration > 0) (currentPosition.toFloat() / duration) else 0f,
+                                                    onValueChange = { progress ->
+                                                        exoPlayer.seekTo((progress * duration).toLong())
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = androidx.compose.material3.SliderDefaults.colors(
+                                                        thumbColor = Color.White,
+                                                        activeTrackColor = Color.White,
+                                                        inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                                                    )
+                                                )
+                                                
+                                                // Total time
+                                                Text(
+                                                    text = formatDuration(duration),
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                
+                                                // Mute/Unmute button
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(40.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color.White.copy(alpha = 0.2f))
+                                                        .clickable {
+                                                            isMuted = !isMuted
+                                                            exoPlayer.volume = if (isMuted) 0f else 1f
+                                                        },
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (isMuted) 
+                                                            Icons.Filled.VolumeOff 
+                                                        else 
+                                                            Icons.Filled.VolumeUp,
+                                                        contentDescription = if (isMuted) "Unmute" else "Mute",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Image - full view
+                                        AsyncImage(
+                                            model = coil.request.ImageRequest.Builder(context)
+                                                .data(mediaUrl)
+                                                .crossfade(300)
+                                                .build(),
+                                            contentDescription = "Image ${page + 1}",
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .pointerInput(Unit) {
+                                                    detectTapGestures(onTap = { isFullscreenGallery = false })
+                                                },
+                                            contentScale = ContentScale.Fit
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            // Page indicator
+                            if (allMediaUrls.size > 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 24.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "${fullscreenPagerState.currentPage + 1}/${allMediaUrls.size}",
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                            
+                            // Close button
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 16.dp, end = 16.dp)
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.2f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                                    .clickable { isFullscreenGallery = false },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             } else {
                 // No media - show placeholder/content background
                 Box(
@@ -908,7 +1239,7 @@ fun PremiumPostCard(
         }
         } // End else block for shouldHidePost
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp)) // Bottom margin to actions: 12dp
 
         // Action Capsule + Bookmark
         ActionCapsuleRow(
@@ -921,13 +1252,14 @@ fun PremiumPostCard(
             onSave = onSave
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Caption
-        CaptionSection(
-            username = post.username ?: "User",
-            caption = post.content,
-            timeAgo = formatTimeAgo(post.createdAt)
+        // Caption is now shown ABOVE media, so just show time ago here
+        Text(
+            text = formatTimeAgo(post.createdAt),
+            color = Color.Gray,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 12.dp)
         )
     }
 }
@@ -999,26 +1331,19 @@ private fun UserInfoBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Glassmorphism pill with avatar + username
+        // Threads-style: Avatar + Username + Time (NO glassmorphism pill)
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(28.dp))
-                .background(Color.Black.copy(alpha = 0.4f))
-                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(28.dp))
+                .weight(1f)
                 .combinedClickable(
                     onClick = { onUserClick() },
                     onLongClick = { onAvatarLongPress() }
-                )
-                .padding(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Avatar with Spinning Neon Ring (if has status)
+            // Avatar with blue "+" indicator (Threads style)
             Box {
-                if (hasStatus) {
-                    SpinningNeonRing()
-                }
-                
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(avatar)
@@ -1026,32 +1351,62 @@ private fun UserInfoBar(
                         .build(),
                     contentDescription = null,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
-                        .border(2.dp, Color.Black, CircleShape),
+                        .border(
+                            width = if (hasStatus) 2.dp else 0.dp,
+                            brush = if (hasStatus) Brush.sweepGradient(
+                                colors = listOf(Color(0xFFE1306C), Color(0xFFF77737), Color(0xFFFCAF45))
+                            ) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)),
+                            shape = CircleShape
+                        ),
                     contentScale = ContentScale.Crop
                 )
                 
-                if (hasStatus) {
-                    // Pulsing status dot
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(CyanGlow)
-                            .border(2.dp, Color.Black, CircleShape)
+                // Blue "+" indicator (like Threads)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF0095F6))
+                        .border(2.dp, Color.Black, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "+",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
             
-            // Username only (no time)
-            Text(
-                text = username,
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            // Username + ">" + Time (Threads style)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = username,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                // Separator
+                Text(
+                    text = "·",
+                    color = Color(0xFF737373),
+                    fontSize = 14.sp
+                )
+                // Time
+                Text(
+                    text = formatTimeAgo(createdAt),
+                    color = Color(0xFF737373),
+                    fontSize = 14.sp
+                )
+            }
         }
 
         // More Button with Animated Popup Menu
@@ -1065,37 +1420,16 @@ private fun UserInfoBar(
         )
         
         Box {
-            // 3-Dot Button with press animation
-            var isPressed by remember { mutableStateOf(false) }
-            val buttonScale by animateFloatAsState(
-                targetValue = if (isPressed) 0.9f else 1f,
-                animationSpec = spring(dampingRatio = 0.5f, stiffness = 500f),
-                label = "buttonScale"
-            )
-            
+            // Simple "..." button (Threads style - no background)
             IconButton(
                 onClick = { showMenu = true },
-                modifier = Modifier
-                    .size(40.dp)
-                    .scale(buttonScale)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.4f))
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                isPressed = true
-                                tryAwaitRelease()
-                                isPressed = false
-                            }
-                        )
-                    }
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Filled.MoreVert,
+                    imageVector = Icons.Filled.MoreHoriz,
                     contentDescription = "More options",
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.size(18.dp)
+                    tint = Color(0xFF737373),
+                    modifier = Modifier.size(20.dp)
                 )
             }
             
@@ -1506,227 +1840,114 @@ private fun ActionCapsuleRow(
     onShare: () -> Unit,
     onSave: () -> Unit
 ) {
-    // Premium Glassmorphism Action Bar
+    // Threads-style: Flat action row with no background (simple icons + counts)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Main Action Capsule with Gradient Border
+        // Like Button
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(50.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF1A1A2E).copy(alpha = 0.95f),
-                            Color(0xFF16162A).copy(alpha = 0.95f),
-                            Color(0xFF1A1A2E).copy(alpha = 0.95f)
-                        )
-                    )
-                )
-                .border(
-                    width = 1.dp,
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF6366F1).copy(alpha = 0.3f),
-                            Color(0xFFEC4899).copy(alpha = 0.2f),
-                            Color(0xFF8B5CF6).copy(alpha = 0.3f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(50.dp)
-                )
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .clickable { onLike() }
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Like Button with Glow Effect
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(
-                        if (isLiked) Brush.radialGradient(
-                            colors = listOf(
-                                Color(0xFFEF4444).copy(alpha = 0.25f),
-                                Color.Transparent
-                            )
-                        ) else Brush.radialGradient(
-                            colors = listOf(Color.Transparent, Color.Transparent)
-                        )
-                    )
-                    .clickable { onLike() }
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Like",
-                        tint = if (isLiked) Color(0xFFEF4444) else Color(0xFFE4E4E7),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = formatCount(post.likesCount),
-                        color = if (isLiked) Color.White else Color(0xFFB4B4C0),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
-            // Elegant Divider
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .height(20.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color(0xFF6366F1).copy(alpha = 0.4f),
-                                Color.Transparent
-                            )
-                        )
-                    )
+            Icon(
+                imageVector = if (isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                contentDescription = "Like",
+                tint = if (isLiked) Color(0xFFED4956) else Color.White,
+                modifier = Modifier.size(22.dp)
             )
-
-            // Comment Button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .clickable { onComment() }
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.ModeComment,
-                        contentDescription = "Comment",
-                        tint = Color(0xFFB4B4C0),
-                        modifier = Modifier.size(19.dp)
-                    )
-                    Text(
-                        text = formatCount(post.commentsCount),
-                        color = Color(0xFFB4B4C0),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
-            // Share Button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .clickable { onShare() }
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Send,
-                        contentDescription = "Share",
-                        tint = Color(0xFFB4B4C0),
-                        modifier = Modifier.size(19.dp)
-                    )
-                    Text(
-                        text = formatCount(post.sharesCount),
-                        color = Color(0xFFB4B4C0),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
-            // Elegant Divider
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .height(20.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color(0xFF6366F1).copy(alpha = 0.4f),
-                                Color.Transparent
-                            )
-                        )
-                    )
-            )
-
-            // Views with Eye Icon
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.RemoveRedEye,
-                    contentDescription = "Views",
-                    tint = Color(0xFF8B8B9A),
-                    modifier = Modifier.size(18.dp)
-                )
+            if (post.likesCount > 0) {
                 Text(
-                    text = formatCount(post.viewsCount),
-                    color = Color(0xFF8B8B9A),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                    text = formatCount(post.likesCount),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal
                 )
             }
         }
 
-        // Premium Bookmark Button with Gradient Glow
-        Box(
+        // Comment Button
+        Row(
             modifier = Modifier
-                .size(46.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isSaved) Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF6366F1).copy(alpha = 0.3f),
-                            Color(0xFF1A1A2E).copy(alpha = 0.9f)
-                        )
-                    ) else Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF1A1A2E).copy(alpha = 0.95f),
-                            Color(0xFF16162A).copy(alpha = 0.95f)
-                        )
-                    )
-                )
-                .border(
-                    width = 1.dp,
-                    brush = if (isSaved) Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF6366F1).copy(alpha = 0.6f),
-                            Color(0xFF8B5CF6).copy(alpha = 0.4f)
-                        )
-                    ) else Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF6366F1).copy(alpha = 0.2f),
-                            Color(0xFF8B5CF6).copy(alpha = 0.15f)
-                        )
-                    ),
-                    shape = CircleShape
-                )
-                .clickable { onSave() },
-            contentAlignment = Alignment.Center
+                .clickable { onComment() }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                imageVector = if (isSaved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                contentDescription = "Save",
-                tint = if (isSaved) Color(0xFF818CF8) else Color(0xFFB4B4C0),
+                imageVector = Icons.Outlined.ModeComment,
+                contentDescription = "Comment",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp)
+            )
+            if (post.commentsCount > 0) {
+                Text(
+                    text = formatCount(post.commentsCount),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            }
+        }
+
+        // Repost/Retweet Button (Threads uses repost icon)
+        Row(
+            modifier = Modifier
+                .clickable { /* repost action */ }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Repeat,
+                contentDescription = "Repost",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp)
+            )
+            if (post.sharesCount > 0) {
+                Text(
+                    text = formatCount(post.sharesCount),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            }
+        }
+
+        // Share Button (Send/Paper plane)
+        Row(
+            modifier = Modifier
+                .clickable { onShare() }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Send,
+                contentDescription = "Share",
+                tint = Color.White,
                 modifier = Modifier.size(22.dp)
             )
         }
+        
+        // Spacer to push bookmark to right
+        Spacer(modifier = Modifier.weight(1f))
+        
+        // Bookmark (optional, some Threads posts don't show this prominently)
+        Icon(
+            imageVector = if (isSaved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+            contentDescription = "Save",
+            tint = if (isSaved) Color.White else Color.White,
+            modifier = Modifier
+                .size(22.dp)
+                .clickable { onSave() }
+        )
     }
 }
 
@@ -1774,3 +1995,669 @@ private fun formatCount(count: Int): String {
         else -> count.toString()
     }
 }
+
+// Format duration in mm:ss format
+private fun formatDuration(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
+}
+
+/**
+ * Native Threads-style Multiple Media Layout
+ * - Horizontal scrollable row (LazyRow) showing images side by side
+ * - Each image takes ~1/3 screen width with peek of next images
+ * - ContentScale.Crop - fill portrait frames
+ * - Supports up to 20 media items
+ * - 2dp spacing, 8dp rounded corners
+ * - Dark theme matching Threads exactly
+ */
+@Composable
+fun ThreadsMediaGrid(
+    mediaUrls: List<String>,
+    onMediaClick: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    
+    if (mediaUrls.isEmpty()) return
+    
+    // Fullscreen gallery state
+    var showFullscreen by remember { mutableStateOf(false) }
+    var fullscreenStartIndex by remember { mutableIntStateOf(0) }
+    
+    // Track current visible index for page indicator
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val currentIndex by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) 0
+            else {
+                // Find the item that occupies the center
+                val center = layoutInfo.viewportStartOffset + layoutInfo.viewportSize.width / 2
+                visibleItems.minByOrNull { kotlin.math.abs((it.offset + it.size / 2) - center) }?.index ?: 0
+            }
+        }
+    }
+    
+    // Fullscreen Gallery Dialog
+    if (showFullscreen) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showFullscreen = false },
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .systemBarsPadding()
+            ) {
+                // Swipeable HorizontalPager for fullscreen gallery
+                val fullscreenPagerState = androidx.compose.foundation.pager.rememberPagerState(
+                    initialPage = fullscreenStartIndex
+                ) { mediaUrls.size }
+                
+                androidx.compose.foundation.pager.HorizontalPager(
+                    state = fullscreenPagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    val mediaUrl = mediaUrls[page]
+                    val isVideo = mediaUrl.endsWith(".mp4", ignoreCase = true) ||
+                                  mediaUrl.endsWith(".webm", ignoreCase = true) ||
+                                  mediaUrl.endsWith(".mov", ignoreCase = true)
+                    
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = { showFullscreen = false })
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isVideo) {
+                            // Actual Video Player in fullscreen
+                            val videoContext = LocalContext.current
+                            var isPlaying by remember { mutableStateOf(true) }
+                            
+                            val exoPlayer = remember(mediaUrl) {
+                                ExoPlayer.Builder(videoContext).build().apply {
+                                    setMediaItem(MediaItem.fromUri(mediaUrl))
+                                    prepare()
+                                    playWhenReady = true
+                                    repeatMode = Player.REPEAT_MODE_ONE
+                                }
+                            }
+                            
+                            DisposableEffect(exoPlayer) {
+                                onDispose {
+                                    exoPlayer.release()
+                                }
+                            }
+                            
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable {
+                                        isPlaying = !isPlaying
+                                        exoPlayer.playWhenReady = isPlaying
+                                    }
+                            ) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        PlayerView(ctx).apply {
+                                            player = exoPlayer
+                                            useController = false
+                                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                            layoutParams = FrameLayout.LayoutParams(
+                                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                                ViewGroup.LayoutParams.MATCH_PARENT
+                                            )
+                                            setBackgroundColor(android.graphics.Color.BLACK)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                
+                                // Play/Pause icon overlay (only show when paused)
+                                if (!isPlaying) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.Center)
+                                            .size(72.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.Black.copy(alpha = 0.6f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.PlayArrow,
+                                            contentDescription = "Play",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                    }
+                                }
+                                
+                                // Video controls - Timeline + Mute button
+                                var currentPosition by remember { mutableStateOf(0L) }
+                                var duration by remember { mutableStateOf(0L) }
+                                var isMuted by remember { mutableStateOf(false) }
+                                
+                                LaunchedEffect(exoPlayer) {
+                                    while (true) {
+                                        currentPosition = exoPlayer.currentPosition
+                                        duration = exoPlayer.duration.coerceAtLeast(1L)
+                                        delay(200)
+                                    }
+                                }
+                                
+                                Row(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.Transparent,
+                                                    Color.Black.copy(alpha = 0.7f)
+                                                )
+                                            )
+                                        )
+                                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Text(
+                                        text = formatDuration(currentPosition),
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    
+                                    androidx.compose.material3.Slider(
+                                        value = if (duration > 0) (currentPosition.toFloat() / duration) else 0f,
+                                        onValueChange = { progress ->
+                                            exoPlayer.seekTo((progress * duration).toLong())
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors = androidx.compose.material3.SliderDefaults.colors(
+                                            thumbColor = Color.White,
+                                            activeTrackColor = Color.White,
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                                        )
+                                    )
+                                    
+                                    Text(
+                                        text = formatDuration(duration),
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.2f))
+                                            .clickable {
+                                                isMuted = !isMuted
+                                                exoPlayer.volume = if (isMuted) 0f else 1f
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isMuted) 
+                                                Icons.Filled.VolumeOff 
+                                            else 
+                                                Icons.Filled.VolumeUp,
+                                            contentDescription = if (isMuted) "Unmute" else "Mute",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // Image - full view without cropping
+                            AsyncImage(
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(mediaUrl)
+                                    .crossfade(300)
+                                    .build(),
+                                contentDescription = "Image ${page + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
+                }
+                
+                // Page indicator at top center
+                if (mediaUrls.size > 1) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 24.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "${fullscreenPagerState.currentPage + 1}/${mediaUrls.size}",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                
+                // Close button at top right
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 16.dp, end = 16.dp)
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.2f))
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                        .clickable { showFullscreen = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+    }
+    
+    Box(modifier = modifier.fillMaxWidth()) {
+        when {
+            // Single image - full width, portrait
+            mediaUrls.size == 1 -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(550.dp) // Fixed 520dp height
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF0A0A0A))
+                        .clickable { fullscreenStartIndex = 0; showFullscreen = true }
+                ) {
+                    val isVideo = mediaUrls[0].endsWith(".mp4", ignoreCase = true) ||
+                                  mediaUrls[0].endsWith(".webm", ignoreCase = true) ||
+                                  mediaUrls[0].endsWith(".mov", ignoreCase = true)
+                    
+                    AsyncImage(
+                        model = coil.request.ImageRequest.Builder(context)
+                            .data(mediaUrls[0])
+                            .crossfade(300)
+                            .build(),
+                        contentDescription = "Media",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    
+                    if (isVideo) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // 2 images - side by side equal width
+            mediaUrls.size == 2 -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(550.dp), // Fixed 520dp height for 2 images
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    mediaUrls.forEachIndexed { index, url ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF0A0A0A))
+                                .clickable { fullscreenStartIndex = index; showFullscreen = true }
+                        ) {
+                            val isVideo = url.endsWith(".mp4", ignoreCase = true) ||
+                                          url.endsWith(".webm", ignoreCase = true) ||
+                                          url.endsWith(".mov", ignoreCase = true)
+                            
+                            AsyncImage(
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(url)
+                                    .crossfade(300)
+                                    .build(),
+                                contentDescription = "Media ${index + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            
+                            if (isVideo) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.6f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Page indicator for 2 images
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "1/2",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Normal
+                    )
+                }
+            }
+            
+            // 3+ images - Threads-style horizontal scrollable row
+            else -> {
+                // Calculate item width for ~1/3 screen with peek
+                val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                val screenWidth = configuration.screenWidthDp.dp
+                val itemWidth = (screenWidth - 32.dp) / 3 // ~1/3 width with padding
+                
+                androidx.compose.foundation.lazy.LazyRow(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp), // Portrait height
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp)
+                ) {
+                    items(mediaUrls.size) { index ->
+                        val url = mediaUrls[index]
+                        val isVideo = url.endsWith(".mp4", ignoreCase = true) ||
+                                      url.endsWith(".webm", ignoreCase = true) ||
+                                      url.endsWith(".mov", ignoreCase = true)
+                        
+                        Box(
+                            modifier = Modifier
+                                .width(itemWidth)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF0A0A0A))
+                                .clickable { fullscreenStartIndex = index; showFullscreen = true }
+                        ) {
+                            // Use video frame for thumbnails if it's a video
+                            AsyncImage(
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(url)
+                                    .apply {
+                                        if (isVideo) {
+                                            decoderFactory(coil.decode.VideoFrameDecoder.Factory())
+                                        }
+                                    }
+                                    .crossfade(300)
+                                    .build(),
+                                contentDescription = "Media ${index + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            
+                            if (isVideo) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.6f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Page indicator - Threads style (1/5, 2/5, etc)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "${currentIndex + 1}/${mediaUrls.size}",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Threads-style Grid Preview for multiple media (2x2 layout)
+ * Used when showing a preview grid with "+X" overlay
+ */
+@Composable
+fun ThreadsMediaPreviewGrid(
+    mediaUrls: List<String>,
+    onMediaClick: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val maxVisible = 4
+    val displayItems = mediaUrls.take(maxVisible)
+    val remainingCount = (mediaUrls.size - maxVisible).coerceAtLeast(0)
+    val spacing = 3.dp
+    
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(1f) // 1:1 square container
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF0A0A0A))
+    ) {
+        when (displayItems.size) {
+            1 -> {
+                // Single image
+                AsyncImage(
+                    model = coil.request.ImageRequest.Builder(context)
+                        .data(displayItems[0])
+                        .crossfade(300)
+                        .build(),
+                    contentDescription = "Media",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { onMediaClick(0) },
+                    contentScale = ContentScale.Crop
+                )
+            }
+            2 -> {
+                // 2 images side by side
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(spacing)
+                ) {
+                    displayItems.forEachIndexed { index, url ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF1A1A1A))
+                                .clickable { onMediaClick(index) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AsyncImage(
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(url)
+                                    .crossfade(300)
+                                    .build(),
+                                contentDescription = "Image ${index + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+            }
+            else -> {
+                // 3-4 images in 2x2 grid
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(spacing)
+                ) {
+                    // First row
+                    Row(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(spacing)
+                    ) {
+                        repeat(2) { index ->
+                            if (index < displayItems.size) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFF1A1A1A))
+                                        .clickable { onMediaClick(index) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = coil.request.ImageRequest.Builder(context)
+                                            .data(displayItems[index])
+                                            .crossfade(300)
+                                            .build(),
+                                        contentDescription = "Image ${index + 1}",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Second row
+                    Row(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(spacing)
+                    ) {
+                        repeat(2) { i ->
+                            val index = i + 2
+                            if (index < displayItems.size) {
+                                val isLast = index == displayItems.size - 1 && remainingCount > 0
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFF1A1A1A))
+                                        .clickable { onMediaClick(index) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = coil.request.ImageRequest.Builder(context)
+                                            .data(displayItems[index])
+                                            .crossfade(300)
+                                            .build(),
+                                        contentDescription = "Image ${index + 1}",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    
+                                    // "+X" overlay on last cell if more items
+                                    if (isLast) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.6f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "+$remainingCount",
+                                                color = Color.White,
+                                                fontSize = 28.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Page indicator for grid
+        if (mediaUrls.size > 1) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "1/${mediaUrls.size}",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+

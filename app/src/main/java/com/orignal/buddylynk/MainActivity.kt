@@ -143,7 +143,7 @@ fun BuddyLynkApp() {
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
             bottomBar = {
-                if (showBottomBar && isConnected && isServerOnline) {
+                if (showBottomBar && isConnected) {
                     FloatingDockNavigation(
                         currentRoute = currentRoute ?: "",
                         onNavigate = { route ->

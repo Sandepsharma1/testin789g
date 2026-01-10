@@ -93,16 +93,10 @@ private fun DockNavButton(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val scale by animateFloatAsState(
-        targetValue = if (isSelected) 1f else 0.9f,
-        animationSpec = spring(dampingRatio = 0.6f),
-        label = "scale"
-    )
-
+    // No animation - stable display
     Box(
         modifier = Modifier
             .size(44.dp)
-            .scale(scale)
             .clip(CircleShape)
             .background(
                 if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent

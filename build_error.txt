@@ -1,0 +1,40 @@
+﻿
+> Configure project :app
+WARNING: The following problems were found when resolving the SDK location:
+Where: sdk.dir property in local.properties file. Problem: Directory does not exist
+
+.\gradlew.bat : 
+At line:1 char:1
++ .\gradlew.bat installDebug 2>&1 | 
+Out-File -FilePath build_error.txt  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpeci 
+   fied: (:String) [], RemoteExceptio  
+  n
+    + FullyQualifiedErrorId : NativeCo 
+   mmandError
+ 
+FAILURE: Build failed with an 
+exception.
+
+* What went wrong:
+A problem occurred configuring project 
+':app'.
+> SDK location not found. Define a 
+valid SDK location with an 
+ANDROID_HOME environment variable or 
+by setting the sdk.dir path in your 
+project's local properties file at 'D:\
+Users\asdf\Desktop\Buddylynk\local.prop
+erties'.
+
+* Try:
+> Run with --stacktrace option to get 
+the stack trace.
+> Run with --info or --debug option to 
+get more log output.
+> Run with --scan to get full insights.
+> Get more help at 
+https://help.gradle.org.
+
+BUILD FAILED in 2s

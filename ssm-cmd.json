@@ -1,0 +1,1 @@
+{"commands":["sudo -u ubuntu -i pm2 restart all"]}
